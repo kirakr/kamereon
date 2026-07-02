@@ -49,6 +49,11 @@
     margin-top:14px; padding-top:10px; border-top:1px solid rgba(255,255,255,0.12);
   }
   #pose-panel label { font-size:12px; opacity:0.85; display:block; margin-bottom:6px; }
+  #freecam-panel {
+    margin-top:14px; padding-top:10px; border-top:1px solid rgba(255,255,255,0.12);
+  }
+  #freecam-panel label { font-size:12px; opacity:0.85; display:block; margin-bottom:6px; }
+  #freecam-btn.active { background:#e0a800; color:#222; }
   #pose-buttons { display:grid; grid-template-columns:repeat(2, 1fr); gap:6px; }
   .pose-btn {
     padding:7px 2px; border:none; border-radius:6px; cursor:pointer;
@@ -239,7 +244,13 @@
         <button class="pose-btn" data-pose="crawl">⑧匍匐前進</button>
       </div>
     </div>
+
+    <div id="freecam-panel">
+      <label>🎥 フリーカメラ（隠れる側専用・視点だけ自由に移動）</label>
+      <button id="freecam-btn" class="pose-btn" style="width:100%;">🎥 フリーカメラ: OFF</button>
+    </div>
   </div>
+
 
   <div id="eyedrop-preview">
     <div class="ring"></div>
@@ -252,6 +263,7 @@
     スポイトON時: 背景にカーソルを合わせると色プレビュー → クリックで取得<br>
     壁・建物に<b>触れている間にEキー</b>を押すと張り付き（よじ登り）ます。もう一度Eキーで解除（張り付き中はWASDで壁面をよじ登り・横移動）<br>
     張り付ける壁・障害物の近くで<b>Spaceキー長押し</b>すると上昇します。Spaceを離す、または壁・障害物から離れると自動的に落下します（<b>Ctrlキー</b>で即座に降下も可能）。<br>
+    <b>🎥 フリーカメラ</b>（隠れる側専用）: ONにするとキャラクターは止まったまま、視点だけ自由に移動できます。WASDで飛行移動・Spaceで上昇・Cキーで下降・マウスでいつでも視点旋回（右クリック不要）<br>
     <b>1〜8</b>: 直立・しゃがみ・べったり(Tポーズ)・体育座り・警戒立ち・伸び・丸まる・匍匐前進の8ポーズを切替。張り付き中にポーズを変えても張り付きは解除されません<br>
     マップ: 家具・看板・絵画・ネオンサインなど大量配置。<b>壁には衝突判定あり</b>（すり抜け不可）。各壁には通行用の開口部あり／天井あり
   </div>
@@ -1419,6 +1431,16 @@ const camRig = {
 // 右ドラッグ中はPointer Lockを使うことで、カーソルが画面外に出ても
 // movementX/Y が安定して取得でき、「途中で視点が止まる/飛ぶ」問題を解消する。
 let isOrbiting = false; // 右ドラッグ中
+// 鬼のFPS視点中やフリーカメラ中は「右クリックを押し続けなくても常に視点操作できる」
+// ようにしたい。以前は右クリックを離す/離した拍子のpointerlockchangeで問答無用に
+// isOrbiting=falseにしてしまい、右クリックを離した瞬間に視点操作ができなくなって
+// いた（鬼視点でも常に右クリック長押しが必要になってしまうバグの原因）。
+// forcedLookExternal（オンライン対戦モジュールなど外部からの強制ON）や
+// freeCamActive（フリーカメラ）の間は、右クリックの押し離しでこれを解除しないようにする。
+let forcedLookExternal = false;
+let freeCamActive = false; // フリーカメラモード中か（隠れる側専用）
+const freeCam = { pos: new THREE.Vector3(), yaw:0, pitch:0 };
+function isForcedLook(){ return forcedLookExternal || freeCamActive; }
 window.addEventListener("contextmenu", (e)=> e.preventDefault());
 
 renderer.domElement.addEventListener("pointerdown", (e)=>{
@@ -1431,6 +1453,7 @@ renderer.domElement.addEventListener("pointerdown", (e)=>{
 });
 window.addEventListener("pointerup", (e)=>{
   if (e.button === 2) {
+    if (isForcedLook()) return; // 常時視点操作中は右クリックを離しても解除しない
     isOrbiting = false;
     if (document.pointerLockElement === renderer.domElement && document.exitPointerLock) {
       document.exitPointerLock();
@@ -1438,10 +1461,16 @@ window.addEventListener("pointerup", (e)=>{
   }
 });
 document.addEventListener("pointerlockchange", ()=>{
-  if (document.pointerLockElement !== renderer.domElement) isOrbiting = false;
+  if (document.pointerLockElement !== renderer.domElement && !isForcedLook()) isOrbiting = false;
 });
 window.addEventListener("pointermove", (e)=>{
-  if (isOrbiting) {
+  if (freeCamActive) {
+    freeCam.yaw   -= e.movementX * camRig.sensitivity;
+    freeCam.pitch -= e.movementY * camRig.sensitivity;
+    freeCam.pitch = Math.max(-1.5, Math.min(1.5, freeCam.pitch));
+    return;
+  }
+  if (isOrbiting || forcedLookExternal) {
     camRig.yaw   -= e.movementX * camRig.sensitivity;
     camRig.pitch -= e.movementY * camRig.sensitivity;
     camRig.pitch = Math.max(camRig.minPitch, Math.min(camRig.maxPitch, camRig.pitch));
@@ -1451,6 +1480,59 @@ renderer.domElement.addEventListener("wheel", (e)=>{
   camRig.distance += e.deltaY * 0.0035;
   camRig.distance = Math.max(camRig.minDistance, Math.min(camRig.maxDistance, camRig.distance));
 }, { passive:true });
+
+/* =========================================================
+   フリーカメラ（隠れる側専用）
+   ONにするとキャラクターは完全に静止し、カメラだけがWASD+Space/Cキーで
+   自由に飛び回れるようになる（右クリック不要でいつでもマウス視点操作可能）。
+   ========================================================= */
+function setFreeCam(active){
+  if (active === freeCamActive) return;
+  freeCamActive = active;
+  if (freeCamActive) {
+    freeCam.pos.copy(camera.position);
+    freeCam.yaw = camRig.yaw;
+    freeCam.pitch = camRig.pitch;
+    isOrbiting = true;
+    if (renderer.domElement.requestPointerLock) renderer.domElement.requestPointerLock();
+  } else {
+    isOrbiting = false;
+    if (document.pointerLockElement === renderer.domElement && document.exitPointerLock) {
+      document.exitPointerLock();
+    }
+  }
+}
+function updateFreeCamera(dt){
+  const speed = 6.0 * CHAR_SCALE * (keys.shift ? 2.2 : 1);
+  const forward = new THREE.Vector3(
+    -Math.sin(freeCam.yaw) * Math.cos(freeCam.pitch),
+    Math.sin(freeCam.pitch),
+    -Math.cos(freeCam.yaw) * Math.cos(freeCam.pitch)
+  );
+  const right = new THREE.Vector3(Math.cos(freeCam.yaw), 0, -Math.sin(freeCam.yaw));
+  const move = new THREE.Vector3();
+  if (keys.w) move.add(forward);
+  if (keys.s) move.sub(forward);
+  if (keys.d) move.add(right);
+  if (keys.a) move.sub(right);
+  if (keys.space) move.y += 1;
+  if (freeCamDown) move.y -= 1;
+  if (move.lengthSq() > 0.0001) {
+    move.normalize();
+    freeCam.pos.addScaledVector(move, speed * dt);
+  }
+  camera.rotation.order = "YXZ";
+  camera.position.copy(freeCam.pos);
+  camera.rotation.set(freeCam.pitch, freeCam.yaw, 0);
+}
+const freecamBtnEl = document.getElementById("freecam-btn");
+if (freecamBtnEl) {
+  freecamBtnEl.addEventListener("click", ()=>{
+    setFreeCam(!freeCamActive);
+    freecamBtnEl.textContent = "🎥 フリーカメラ: " + (freeCamActive ? "ON" : "OFF");
+    freecamBtnEl.classList.toggle("active", freeCamActive);
+  });
+}
 
 // 初期カメラ位置を即時反映
 function updateTPSCamera(dt, snap){
@@ -1752,8 +1834,10 @@ function detachFromWall(){
    ポーズ・ステートマシン（直立 / しゃがみ / べったり擬態）
    ========================================================= */
 const keys = { w:false, a:false, s:false, d:false, space:false, shift:false };
+let freeCamDown = false; // フリーカメラ中のCキー（下降）。既存のkeysオブジェクトとは別管理。
 window.addEventListener("keydown", (e)=>{
   const k = e.key.toLowerCase();
+  if (k === "c") freeCamDown = true;
   if (k in keys) keys[k] = true;
   if (k === " ") {
     e.preventDefault(); // スペースキーでのページスクロールを防ぐ
@@ -1769,6 +1853,7 @@ window.addEventListener("keydown", (e)=>{
 });
 window.addEventListener("keyup", (e)=>{
   const k = e.key.toLowerCase();
+  if (k === "c") freeCamDown = false;
   if (k in keys) keys[k] = false;
   if (k === " ") {
     keys.space = false;
@@ -1848,6 +1933,9 @@ const wallHintEl = document.getElementById("wall-hint");
 function isMoving(){ return keys.w || keys.a || keys.s || keys.d; }
 
 function updateAnimation(dt){
+  // フリーカメラ中はキャラクターの移動・アニメーションを完全に止め、
+  // 視点（カメラ）だけが自由に飛び回れるようにする。
+  if (freeCamActive) return;
   stickCooldownUpdate(dt);
   snapToGround(dt);
   updatePoseBlend(dt);
@@ -2317,7 +2405,9 @@ function animate(){
   requestAnimationFrame(animate);
   const dt = Math.min(clock.getDelta(), 0.05);
   updateAnimation(dt);
-  if (window.__CH && window.__CH.overrideCamera) {
+  if (freeCamActive) {
+    updateFreeCamera(dt);
+  } else if (window.__CH && window.__CH.overrideCamera) {
     window.__CH.overrideCamera(dt);
   } else {
     updateTPSCamera(dt, false);
@@ -2337,6 +2427,15 @@ Object.assign(window.__CH, {
   resolveCollisions, keys, setSizeMultiplier,
   setPaintDisabled(v){ paintDisabledExternally = v; },
   setOrbiting(v){ isOrbiting = v; },
+  setForcedLook(v){ forcedLookExternal = v; },
+  setFreeCamMode(v){
+    setFreeCam(v);
+    if (freecamBtnEl) {
+      freecamBtnEl.textContent = "🎥 フリーカメラ: " + (freeCamActive ? "ON" : "OFF");
+      freecamBtnEl.classList.toggle("active", freeCamActive);
+    }
+  },
+  isFreeCamActive(){ return freeCamActive; },
   ATLAS_COLS, ATLAS_ROWS, PAINT_CANVAS_SIZE, remapBoxUVsToAtlas,
   capturePaintSnapshot,
   consumePaintDirty(){ const d = paintDirty; paintDirty = false; return d; },
@@ -2550,6 +2649,7 @@ function onPhaseChanged(from, to){
     mpEnd.style.display = "none";
     mpOverlay.style.display = "flex";
     exitFpsMode();
+    if (CH.isFreeCamActive && CH.isFreeCamActive()) CH.setFreeCamMode(false);
     CH.setSizeMultiplier(1);
     mySizeMul = 1;
   }
@@ -2716,12 +2816,14 @@ CH.renderer.domElement.addEventListener("pointerdown", (e)=>{
 function enterFpsMode(){
   fpsActive = true;
   CH.setOrbiting(true);
+  CH.setForcedLook(true); // 右クリックを押しっぱなしにしなくても常に視点操作できるようにする
   if (CH.renderer.domElement.requestPointerLock) CH.renderer.domElement.requestPointerLock();
   mpGun.style.display = "block";
   crosshairEl.style.display = "block";
 }
 function exitFpsMode(){
   fpsActive = false;
+  CH.setForcedLook(false);
   CH.setOrbiting(false);
   if (document.pointerLockElement) document.exitPointerLock();
   mpGun.style.display = "none";
@@ -2752,6 +2854,9 @@ function updateRoleVisuals(){
   const isOniInGame = inGame && role === "oni";
 
   CH.setPaintDisabled(isOniInGame);
+  // フリーカメラは隠れる側専用機能。鬼としてゲーム中は強制的にOFFにする
+  // （UI(ui-panel)自体も鬼のゲーム中は非表示になるが、念のため機能側でも無効化しておく）
+  if (isOniInGame && CH.isFreeCamActive && CH.isFreeCamActive()) CH.setFreeCamMode(false);
 
   // 鬼視点では、ペイント用UI(右上)・操作方法(左下)は不要なので非表示にする
   if (uiPanelEl)   uiPanelEl.style.display   = isOniInGame ? "none" : "";
@@ -2966,8 +3071,17 @@ function showEndScreen(){
   exitFpsMode();
 }
 
+// renderPanel()は状態同期のたびに(ホストは100msごとに！)呼ばれるが、
+// 毎回innerHTMLを丸ごと作り直すと、その瞬間にクリックしていた「コピー」や
+// 「ゲーム開始」ボタンがDOMごと差し替えられてクリックが途中でキャンセルされ、
+// 「ボタンの反応が悪い」原因になっていた。表示すべき内容が実際に変わった
+// 時だけ作り直すようにして、この問題を防ぐ。
+let lastPanelSig = null;
 function renderPanel(){
   if (!peer) {
+    const sig = "form";
+    if (sig === lastPanelSig) return;
+    lastPanelSig = sig;
     mpPanel.innerHTML =
       '<h2>🕹️ オンライン かくれんぼ</h2>' +
       '<label>プレイヤー名</label>' +
@@ -3005,6 +3119,10 @@ function renderPanel(){
       '<label>このリンクをゲストに送ってください</label>' +
       '<div id="mp-link-row"><input type="text" id="mp-link" value="' + link + '" readonly><button id="mp-copy-btn">コピー</button></div>';
   }
+
+  const sig = JSON.stringify({ isHost, myId, list, hasLink: !!linkHtml });
+  if (sig === lastPanelSig) return; // 見た目に反映すべき変化がなければDOMを作り直さない
+  lastPanelSig = sig;
 
   mpPanel.innerHTML =
     '<h2>🕹️ ロビー</h2>' +
