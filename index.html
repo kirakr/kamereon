@@ -153,6 +153,7 @@
   #mp-hud .role-hider .badge { color:#7fe0ff; }
   #mp-hud .role-oni .badge { color:#ff6a6a; }
   #mp-hud .timer { font-size:26px; margin-top:4px; text-shadow:0 2px 6px rgba(0,0,0,.8); }
+  #mp-hud .counts { font-size:13px; margin-top:4px; opacity:.9; text-shadow:0 2px 6px rgba(0,0,0,.8); }
 
   #mp-blackout {
     position:absolute; inset:0; z-index:55; display:none;
@@ -191,6 +192,7 @@
   <div id="mp-hud">
     <div class="badge">ロール: -</div>
     <div class="timer"></div>
+    <div class="counts"></div>
   </div>
   <div id="mp-blackout">
     <div class="big">🙈 鬼はただいま目隠し中…隠れる側は自由に散らばってください</div>
@@ -2123,7 +2125,14 @@ document.getElementById("clear-btn").addEventListener("click", ()=>{
     p.ctx.fillRect(0,0,p.canvas.width,p.canvas.height);
     p.texture.needsUpdate = true;
   });
+  paintDirty = true;
 });
+
+// 現在の塗り状態を、パーツごとのPNG画像（Data URL）の配列として書き出す。
+// オンライン対戦モジュールが、これを他プレイヤーへ送信して見た目を同期する。
+function capturePaintSnapshot(){
+  return paintableParts.map(p => p.canvas.toDataURL("image/png"));
+}
 
 function getPointerNDC(event){
   const rect = renderer.domElement.getBoundingClientRect();
@@ -2131,6 +2140,10 @@ function getPointerNDC(event){
   pointerNDC.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
 }
 
+// オンライン対戦中、自分の見た目（ペイント内容）が変わったことを他プレイヤーへ
+// 同期するためのフラグ。塗るたび・リセットするたびに立てておき、対戦モジュール側が
+// 定期的にこれを確認して、変化があれば他プレイヤーへ画像として送信する。
+let paintDirty = false;
 function paintAtUV(part, uv, color, radiusPx){
   const x = uv.x * part.canvas.width;
   const y = (1 - uv.y) * part.canvas.height;
@@ -2139,6 +2152,7 @@ function paintAtUV(part, uv, color, radiusPx){
   part.ctx.arc(x, y, radiusPx, 0, Math.PI*2);
   part.ctx.fill();
   part.texture.needsUpdate = true;
+  paintDirty = true;
 }
 
 // 画面上の1点をraycastし、命中したパーツに「直径○mmの点」を1つだけ描く。
@@ -2323,6 +2337,9 @@ Object.assign(window.__CH, {
   resolveCollisions, keys, setSizeMultiplier,
   setPaintDisabled(v){ paintDisabledExternally = v; },
   setOrbiting(v){ isOrbiting = v; },
+  ATLAS_COLS, ATLAS_ROWS, PAINT_CANVAS_SIZE, remapBoxUVsToAtlas,
+  capturePaintSnapshot,
+  consumePaintDirty(){ const d = paintDirty; paintDirty = false; return d; },
 });
 
 })();
@@ -2361,7 +2378,8 @@ let lastPhase = "lobby";
 let hideEndTime = 0;
 let seekEndTime = 0;
 let winnerTeam = null;
-let remoteAvatars = {};             // id -> THREE.Group
+let remoteAvatars = {};             // id -> THREE.Group（見た目は白い人形＋実際のペイント内容を反映）
+let paintCache = {};                // id -> [torso,head,leftArm,rightArm,leftLeg,rightLeg] のPNG Data URL配列
 let fpsActive = false;
 let mySizeMul = 1;
 
@@ -2374,6 +2392,7 @@ const mpBlackout = document.getElementById("mp-blackout");
 const mpEnd      = document.getElementById("mp-end");
 const mpGun      = document.getElementById("mp-gun");
 const crosshairEl = document.getElementById("crosshair");
+const eyedropPreviewEl = document.getElementById("eyedrop-preview");
 
 mpToggle.addEventListener("click", ()=>{
   mpOverlay.style.display = (mpOverlay.style.display === "flex") ? "none" : "flex";
@@ -2408,12 +2427,19 @@ function becomeHost(){
     renderPanel();
   });
   peer.on("connection", (conn)=>{
-    conn.on("open", ()=>{ guestConns[conn.peer] = conn; });
+    conn.on("open", ()=>{
+      guestConns[conn.peer] = conn;
+      // 既に誰かがペイント済みなら、新しく入ってきたゲストにもその見た目を送っておく
+      Object.entries(paintCache).forEach(([id, images])=>{
+        try { conn.send({ type:"paint-relay", id, images }); } catch(e){}
+      });
+    });
     conn.on("data", (data)=> handleHostData(conn, data));
     conn.on("close", ()=>{
       delete guestConns[conn.peer];
       delete players[conn.peer];
-      delete remoteAvatars[conn.peer] && removeAvatar(conn.peer);
+      delete paintCache[conn.peer];
+      removeAvatar(conn.peer);
       broadcastState();
     });
   });
@@ -2432,7 +2458,19 @@ function handleHostData(conn, data){
     if (p) { p.x = data.x; p.y = data.y; p.z = data.z; p.ry = data.ry; }
   } else if (data.type === "shoot") {
     handleShoot(conn.peer, data.origin, data.dir);
+  } else if (data.type === "paint") {
+    paintCache[conn.peer] = data.images;
+    applyRemotePaint(conn.peer, data.images);
+    relayPaintToGuests(conn.peer, data.images, conn.peer);
   }
+}
+
+// 見た目の同期（ペイント内容）を他のゲストへ中継する。excludeId は送信元自身を除外するため。
+function relayPaintToGuests(id, images, excludeId){
+  Object.entries(guestConns).forEach(([pid, c])=>{
+    if (pid === excludeId) return;
+    if (c.open) { try { c.send({ type:"paint-relay", id, images }); } catch(e){} }
+  });
 }
 
 /* ===============================================================
@@ -2447,6 +2485,7 @@ function becomeGuest(hostId){
       hostConn.send({ type:"join", name: myName });
       setStatus("ホストに接続しました");
       renderPanel();
+      sendPaintUpdate(); // 現在の見た目（デフォルトの白い人形）を最初に共有しておく
     });
     hostConn.on("data", (data)=> handleGuestData(data));
     hostConn.on("close", ()=>{ setStatus("ホストとの接続が切れました"); });
@@ -2456,8 +2495,14 @@ function becomeGuest(hostId){
 }
 
 function handleGuestData(data){
-  if (!data || data.type !== "state") return;
-  applyState(data);
+  if (!data || !data.type) return;
+  if (data.type === "state") {
+    applyState(data);
+  } else if (data.type === "paint-relay") {
+    applyRemotePaint(data.id, data.images);
+  } else if (data.type === "tracer") {
+    if (data.shooterId !== myId) renderTracer(data.origin, data.dir, data.length);
+  }
 }
 
 /* ===============================================================
@@ -2490,6 +2535,7 @@ function onPhaseChanged(from, to){
   if (to === "hiding") {
     mpOverlay.style.display = "none";
     CH.character.position.set(0, CH.character.position.y, 0);
+    sendPaintUpdate(); // ラウンド開始時点の見た目を共有しておく
   }
   if (to === "seeking") {
     const me = players[myId];
@@ -2592,11 +2638,59 @@ function handleShoot(shooterId, origin, dir){
     const dist = closest.distanceTo(target);
     if (dist < HIT_RADIUS && t < bestT) { bestT = t; bestId = p.id; }
   });
+
+  // 弾道を見えるようにする（撃った本人は fireShot() で既に描画済みなので、それ以外の
+  // クライアント（ホスト自身がこの中で処理している場合を含む）にだけ改めて描画する）
+  const tracerLen = bestId ? bestT : SHOOT_RANGE;
+  if (shooterId !== myId) renderTracer(origin, dir, tracerLen);
+  if (isHost) {
+    Object.values(guestConns).forEach(c=>{
+      if (c.open) { try { c.send({ type:"tracer", shooterId, origin, dir, length: tracerLen }); } catch(e){} }
+    });
+  }
+
   if (bestId) {
     players[bestId].role = "oni";
     broadcastState();
     checkWin();
   }
+}
+
+// 発砲の弾道を、光る線＋発光点として一瞬だけ表示する
+function renderTracer(origin, dir, length){
+  const start = new THREE.Vector3(origin.x, origin.y, origin.z);
+  const d = new THREE.Vector3(dir.x, dir.y, dir.z).normalize();
+  const len = Math.max(0.05, length || SHOOT_RANGE);
+  const end = start.clone().addScaledVector(d, len);
+
+  const geo = new THREE.BufferGeometry().setFromPoints([start, end]);
+  const mat = new THREE.LineBasicMaterial({ color: 0xfff2a0, transparent: true, opacity: 0.95, depthTest: false });
+  const line = new THREE.Line(geo, mat);
+  line.renderOrder = 999;
+  CH.scene.add(line);
+
+  const flashGeo = new THREE.SphereGeometry(0.05, 8, 8);
+  const flashMat = new THREE.MeshBasicMaterial({ color: 0xffffaa, transparent: true, opacity: 0.9, depthTest: false });
+  const flash = new THREE.Mesh(flashGeo, flashMat);
+  flash.position.copy(start);
+  flash.renderOrder = 999;
+  CH.scene.add(flash);
+
+  const t0 = performance.now();
+  const DUR = 140;
+  (function fade(){
+    const t = performance.now() - t0;
+    const k = Math.max(0, 1 - t / DUR);
+    mat.opacity = 0.95 * k;
+    flashMat.opacity = 0.9 * k;
+    flash.scale.setScalar(1 + (1 - k) * 3);
+    if (t < DUR) {
+      requestAnimationFrame(fade);
+    } else {
+      CH.scene.remove(line); geo.dispose(); mat.dispose();
+      CH.scene.remove(flash); flashGeo.dispose(); flashMat.dispose();
+    }
+  })();
 }
 
 function fireShot(){
@@ -2605,6 +2699,7 @@ function fireShot(){
   CH.camera.getWorldDirection(dir);
   const origin = CH.camera.position.clone();
   const payload = { origin:{x:origin.x,y:origin.y,z:origin.z}, dir:{x:dir.x,y:dir.y,z:dir.z} };
+  renderTracer(payload.origin, payload.dir, SHOOT_RANGE); // 撃った瞬間その場で弾道を表示（体感優先の即時描画）
   if (isHost) handleShoot(myId, payload.origin, payload.dir);
   else if (hostConn && hostConn.open) hostConn.send({ type:"shoot", ...payload });
   mpGun.classList.add("fire");
@@ -2645,12 +2740,24 @@ CH.overrideCamera = function(dt){
 
 /* 役割に応じた見た目・操作モードの切り替え */
 let lastRole = null;
+const uiPanelEl    = document.getElementById("ui-panel");
+const helpPanelEl  = document.getElementById("help");
+const paintTagEl   = document.getElementById("paint-mode-tag");
 function updateRoleVisuals(){
   const me = players[myId];
   const role = me ? me.role : "hider";
   const inGame = (phase === "hiding" || phase === "seeking");
+  // 鬼はゲーム中ペイントできない（隠れる側は隠れている間もカモフラージュのため
+  // 塗り続けられる＝これがこのゲームの核となる仕組みなので、鬼だけを対象に無効化する）
+  const isOniInGame = inGame && role === "oni";
 
-  CH.setPaintDisabled(inGame);
+  CH.setPaintDisabled(isOniInGame);
+
+  // 鬼視点では、ペイント用UI(右上)・操作方法(左下)は不要なので非表示にする
+  if (uiPanelEl)   uiPanelEl.style.display   = isOniInGame ? "none" : "";
+  if (helpPanelEl) helpPanelEl.style.display = isOniInGame ? "none" : "";
+  if (paintTagEl)  paintTagEl.style.display  = isOniInGame ? "none" : "block";
+  if (isOniInGame) eyedropPreviewEl.style.display = "none";
 
   if (role !== lastRole) {
     lastRole = role;
@@ -2673,25 +2780,96 @@ function updateRoleVisuals(){
 }
 
 /* ===============================================================
-   リモートプレイヤーの簡易アバター表示
+   リモートプレイヤーのアバター表示
+   自キャラと全く同じ構造（胴体・頭・両腕・両脚のブロック体型）で作り、
+   各パーツに本人が実際に塗った色（ペイントキャンバスの画像）をそのまま
+   テクスチャとして貼り付ける。これにより「白い人形」の形も、塗った色も
+   本人が見ているものと同じに見える。
    隠れる(hiding)フェーズ中はお互いに見えない。探す(seeking)フェーズに
    入ってから初めて姿が見えるようになる。
    =============================================================== */
-function makeAvatar(color){
+function makePartMaterial(image){
+  if (image) {
+    const tex = new THREE.TextureLoader().load(image);
+    tex.generateMipmaps = false;
+    tex.minFilter = THREE.LinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    tex.needsUpdate = true;
+    return new THREE.MeshStandardMaterial({ map: tex, roughness: 0.7 });
+  }
+  return new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.7 });
+}
+function makeDollPart(geo, image){
+  CH.remapBoxUVsToAtlas(geo, CH.ATLAS_COLS, CH.ATLAS_ROWS);
+  const mesh = new THREE.Mesh(geo, makePartMaterial(image));
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  return mesh;
+}
+// 自キャラ本体（torso/headGroup/arm/leg の生成コード）と全く同じ寸法・配置で組み立てる
+function buildDoll(images){
   const g = new THREE.Group();
-  const bodyMat = new THREE.MeshStandardMaterial({ color });
-  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.10, 0.12, 0.34, 10), bodyMat);
-  body.position.y = 0.17 + 0.30 * CH.CAMERA_EYE_HEIGHT * 0; // baseline (再計算は下のscaleで対応)
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.09, 10, 10), bodyMat);
-  g.add(body); g.add(head);
-  body.position.y = CH.CAMERA_EYE_HEIGHT * 0.55;
-  head.position.y = CH.CAMERA_EYE_HEIGHT * 0.95;
+  const img = (i)=> images && images[i];
+
+  const torso = makeDollPart(new THREE.BoxGeometry(0.8, 1.2, 0.4), img(0));
+  torso.position.y = 1.8;
+  g.add(torso);
+
+  const headGroup = new THREE.Group();
+  headGroup.position.set(0, 2.8, 0);
+  g.add(headGroup);
+  const head = makeDollPart(new THREE.BoxGeometry(0.8, 0.8, 0.8), img(1));
+  headGroup.add(head);
+
+  function armFor(side, image){
+    const pivot = new THREE.Group();
+    pivot.position.set(side * 0.6, 2.4, 0);
+    const arm = makeDollPart(new THREE.BoxGeometry(0.4, 1.2, 0.4), image);
+    arm.position.y = -0.6;
+    pivot.add(arm);
+    g.add(pivot);
+    return arm;
+  }
+  const leftArm  = armFor(-1, img(2));
+  const rightArm = armFor( 1, img(3));
+
+  function legFor(side, image){
+    const pivot = new THREE.Group();
+    pivot.position.set(side * 0.2, 1.2, 0);
+    const leg = makeDollPart(new THREE.BoxGeometry(0.4, 1.2, 0.4), image);
+    leg.position.y = -0.6;
+    pivot.add(leg);
+    g.add(pivot);
+    return leg;
+  }
+  const leftLeg  = legFor(-1, img(4));
+  const rightLeg = legFor( 1, img(5));
+
+  // パーツ配列は capturePaintSnapshot() の並び順（torso,head,leftArm,rightArm,leftLeg,rightLeg）と対応させる
+  g.userData.parts = [torso, head, leftArm, rightArm, leftLeg, rightLeg];
   g.castShadow = true;
   return g;
 }
-function ensureAvatar(id, color){
+function applyDollTextures(g, images){
+  if (!g || !images) return;
+  const parts = g.userData.parts || [];
+  parts.forEach((mesh, i)=>{
+    const image = images[i];
+    if (!image) return;
+    const oldMap = mesh.material.map;
+    const tex = new THREE.TextureLoader().load(image);
+    tex.generateMipmaps = false;
+    tex.minFilter = THREE.LinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    tex.needsUpdate = true;
+    mesh.material.map = tex;
+    mesh.material.needsUpdate = true;
+    if (oldMap) oldMap.dispose();
+  });
+}
+function ensureAvatar(id){
   if (!remoteAvatars[id]) {
-    const g = makeAvatar(color);
+    const g = buildDoll(paintCache[id]);
     CH.scene.add(g);
     remoteAvatars[id] = g;
   }
@@ -2701,20 +2879,45 @@ function removeAvatar(id){
   const g = remoteAvatars[id];
   if (g) { CH.scene.remove(g); delete remoteAvatars[id]; }
 }
+// 他プレイヤーからペイント内容の更新を受け取ったときに呼ぶ
+function applyRemotePaint(id, images){
+  paintCache[id] = images;
+  const g = remoteAvatars[id];
+  if (g) applyDollTextures(g, images);
+}
 function updateAvatars(){
   const visible = (phase === "seeking" || phase === "ended");
   Object.keys(remoteAvatars).forEach(id=>{ if (!players[id]) removeAvatar(id); });
   Object.values(players).forEach(p=>{
     if (p.id === myId) return;
     if (!visible) { if (remoteAvatars[p.id]) remoteAvatars[p.id].visible = false; return; }
-    const av = ensureAvatar(p.id, p.color);
-    const scaleMul = p.role === "oni" ? 2 : 1;
+    const av = ensureAvatar(p.id);
+    const scaleMul = (p.role === "oni" ? 2 : 1) * CH.CHAR_SCALE;
     av.scale.setScalar(scaleMul);
     av.position.set(p.x, p.y, p.z);
     av.rotation.y = p.ry || 0;
     av.visible = true;
   });
 }
+
+/* ===============================================================
+   ペイント内容（見た目）の同期
+   塗る・消すたびにフラグが立つので、定期的にチェックして変化があれば
+   自分の姿（各パーツの画像）を相手に送信する。
+   =============================================================== */
+function sendPaintUpdate(){
+  if (!myId || !CH.capturePaintSnapshot) return;
+  const images = CH.capturePaintSnapshot();
+  if (isHost) {
+    paintCache[myId] = images;
+    relayPaintToGuests(myId, images, null);
+  } else if (hostConn && hostConn.open) {
+    try { hostConn.send({ type:"paint", images }); } catch(e){}
+  }
+}
+setInterval(()=>{
+  if (myId && CH.consumePaintDirty && CH.consumePaintDirty()) sendPaintUpdate();
+}, 600);
 
 CH.onFrame = function(){
   updateAvatars();
@@ -2743,6 +2946,9 @@ function renderHud(){
   if (phase === "hiding") remain = Math.max(0, Math.ceil((hideEndTime - now)/1000));
   else remain = Math.max(0, Math.ceil((seekEndTime - now)/1000));
   mpHud.querySelector(".timer").textContent = remain + "s";
+  const oniCount = Object.values(players).filter(p=>p.role === "oni").length;
+  const hiderCount = Object.values(players).filter(p=>p.role === "hider").length;
+  mpHud.querySelector(".counts").textContent = "🔪 鬼 " + oniCount + "人 / 🙈 隠れる側 " + hiderCount + "人";
   mpBlackout.querySelector(".timer").textContent = Math.max(0, Math.ceil((hideEndTime - now)/1000));
 }
 setInterval(renderHud, 250);
