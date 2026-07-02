@@ -1,0 +1,2848 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>めっちゃカメレオン風 - ブラウザ再現デモ（拡張版）</title>
+<style>
+  html, body { margin:0; padding:0; overflow:hidden; width:100%; height:100%; background:#202833; font-family: "Segoe UI", "Hiragino Sans", sans-serif; }
+  #app { position:relative; width:100vw; height:100vh; }
+  canvas#three-canvas { display:block; }
+
+  #ui-panel {
+    position:absolute; top:12px; right:12px;
+    width:270px; background:rgba(20,24,32,0.85);
+    border:1px solid rgba(255,255,255,0.15);
+    border-radius:10px; padding:14px;
+    color:#eee; font-size:13px; backdrop-filter: blur(6px);
+    box-shadow:0 4px 18px rgba(0,0,0,0.4);
+    user-select:none;
+  }
+  #ui-panel h2 { margin:0 0 8px; font-size:15px; letter-spacing:1px; color:#9cf; }
+  .row { display:flex; align-items:center; justify-content:space-between; margin:8px 0; gap:8px; }
+  .row label { flex:0 0 70px; opacity:0.85; }
+  input[type=range] { flex:1; }
+  input[type=color] { width:46px; height:28px; border:none; background:none; cursor:pointer; }
+  button#eyedropper-btn {
+    width:100%; margin-top:6px; padding:8px; border:none; border-radius:6px;
+    background:#3a4a63; color:#fff; cursor:pointer; font-weight:bold;
+    transition:background .15s;
+  }
+  button#eyedropper-btn.active { background:#e0a800; color:#222; }
+  button#eyedropper-btn:hover { filter:brightness(1.15); }
+
+  #recent-colors { display:flex; gap:6px; margin-top:8px; flex-wrap:wrap; }
+  .swatch {
+    width:24px; height:24px; border-radius:50%;
+    border:2px solid rgba(255,255,255,0.5); cursor:pointer;
+    box-shadow:0 0 4px rgba(0,0,0,0.5);
+    transition:transform .12s;
+  }
+  .swatch:hover { transform:scale(1.18); }
+
+  #clear-btn {
+    width:100%; margin-top:10px; padding:6px; border:none; border-radius:6px;
+    background:#5c2b2b; color:#fff; cursor:pointer;
+  }
+  #clear-btn:hover { background:#7a3a3a; }
+
+  #pose-panel {
+    margin-top:14px; padding-top:10px; border-top:1px solid rgba(255,255,255,0.12);
+  }
+  #pose-panel label { font-size:12px; opacity:0.85; display:block; margin-bottom:6px; }
+  #pose-buttons { display:grid; grid-template-columns:repeat(2, 1fr); gap:6px; }
+  .pose-btn {
+    padding:7px 2px; border:none; border-radius:6px; cursor:pointer;
+    background:#3a4a63; color:#fff; font-size:12px; font-weight:bold;
+    transition:background .15s;
+  }
+  .pose-btn.active { background:#2ecc71; color:#0a2; color:#063; }
+  .pose-btn:hover { filter:brightness(1.15); }
+
+  #help {
+    position:absolute; left:12px; bottom:12px; color:#cde; font-size:12px;
+    background:rgba(20,24,32,0.7); padding:8px 12px; border-radius:8px; line-height:1.7;
+    max-width:340px;
+  }
+  #state-tag {
+    position:absolute; left:12px; top:12px; color:#fff; background:rgba(20,24,32,0.7);
+    padding:6px 10px; border-radius:6px; font-size:12px; line-height:1.5;
+  }
+  #paint-mode-tag {
+    position:absolute; left:12px; top:46px; color:#222; background:#ffd166;
+    padding:6px 10px; border-radius:6px; font-size:12px; font-weight:bold;
+    display:none;
+  }
+  #wall-hint {
+    position:absolute; left:50%; bottom:78px; transform:translateX(-50%);
+    color:#062b36; background:#7fe0ff; padding:8px 16px; border-radius:8px;
+    font-size:13px; font-weight:bold; display:none; box-shadow:0 4px 14px rgba(0,0,0,.45);
+    white-space:nowrap;
+  }
+
+  /* スポイトのカラープレビュー（マウス追従） */
+  #eyedrop-preview {
+    position:absolute; pointer-events:none; display:none;
+    transform: translate(-50%, -120%);
+    z-index:50;
+  }
+  #eyedrop-preview .ring {
+    width:64px; height:64px; border-radius:50%;
+    border:4px solid #fff; box-shadow:0 0 0 2px rgba(0,0,0,0.5), 0 4px 14px rgba(0,0,0,0.5);
+  }
+  #eyedrop-preview .hex {
+    text-align:center; margin-top:4px; font-size:11px; color:#fff;
+    background:rgba(0,0,0,0.6); border-radius:4px; padding:2px 6px;
+  }
+
+  /* 中央照準（TPSっぽさ演出） */
+  #crosshair {
+    position:absolute; left:50%; top:50%; width:6px; height:6px;
+    margin:-3px 0 0 -3px; border-radius:50%;
+    background:rgba(255,255,255,0.7); box-shadow:0 0 3px rgba(0,0,0,0.8);
+    pointer-events:none;
+  }
+
+  /* ===== オンライン対戦(かくれんぼ) UI ===== */
+  #mp-toggle {
+    position:absolute; right:12px; bottom:12px; z-index:40;
+    padding:10px 16px; border:none; border-radius:8px; cursor:pointer;
+    background:#2ecc71; color:#04331b; font-weight:bold; font-size:13px;
+    box-shadow:0 4px 14px rgba(0,0,0,.4);
+  }
+  #mp-overlay {
+    position:absolute; inset:0; z-index:60; display:none;
+    background:rgba(10,14,20,0.82); backdrop-filter:blur(4px);
+    color:#eee; font-size:14px;
+    align-items:center; justify-content:center;
+  }
+  #mp-panel {
+    width:min(92vw, 420px); max-height:86vh; overflow:auto;
+    background:rgba(24,28,38,0.96); border:1px solid rgba(255,255,255,.15);
+    border-radius:14px; padding:20px; box-shadow:0 10px 40px rgba(0,0,0,.6);
+  }
+  #mp-panel h2 { margin:0 0 12px; color:#9cf; font-size:18px; }
+  #mp-panel h3 { margin:14px 0 6px; color:#9cf; font-size:14px; }
+  #mp-panel label { display:block; font-size:12px; opacity:.8; margin:8px 0 4px; }
+  #mp-panel input[type=text] {
+    width:100%; box-sizing:border-box; padding:8px; border-radius:6px;
+    border:1px solid rgba(255,255,255,.2); background:#11151d; color:#fff;
+  }
+  .mp-btn {
+    display:block; width:100%; margin-top:10px; padding:10px; border:none; border-radius:8px;
+    background:#3a4a63; color:#fff; font-weight:bold; cursor:pointer; font-size:13px;
+  }
+  .mp-btn:hover { filter:brightness(1.15); }
+  .mp-btn.primary { background:#2ecc71; color:#04331b; }
+  .mp-btn.danger { background:#c0392b; }
+  #mp-link-row { display:flex; gap:6px; margin-top:6px; }
+  #mp-link-row input { flex:1; }
+  #mp-link-row button { flex:0 0 auto; padding:0 10px; border:none; border-radius:6px; background:#3a4a63; color:#fff; cursor:pointer; }
+  #mp-players { margin-top:8px; padding:0; list-style:none; }
+  #mp-players li { padding:6px 8px; margin:4px 0; border-radius:6px; background:rgba(255,255,255,.06); display:flex; justify-content:space-between; }
+  #mp-players li.me { outline:1px solid #2ecc71; }
+  #mp-status { font-size:12px; opacity:.75; margin-top:8px; white-space:pre-line; }
+
+  #mp-hud {
+    position:absolute; top:12px; left:50%; transform:translateX(-50%); z-index:35;
+    display:none; text-align:center; color:#fff; pointer-events:none;
+  }
+  #mp-hud .badge {
+    display:inline-block; padding:8px 20px; border-radius:20px; font-weight:bold; font-size:14px;
+    background:rgba(20,24,32,0.82); box-shadow:0 4px 14px rgba(0,0,0,.5);
+  }
+  #mp-hud .role-hider .badge { color:#7fe0ff; }
+  #mp-hud .role-oni .badge { color:#ff6a6a; }
+  #mp-hud .timer { font-size:26px; margin-top:4px; text-shadow:0 2px 6px rgba(0,0,0,.8); }
+
+  #mp-blackout {
+    position:absolute; inset:0; z-index:55; display:none;
+    background:#05070a; color:#ddd; align-items:center; justify-content:center; flex-direction:column;
+    text-align:center; padding:20px;
+  }
+  #mp-blackout .big { font-size:22px; color:#ff8a8a; margin-bottom:10px; }
+  #mp-blackout .timer { font-size:48px; font-weight:bold; }
+
+  #mp-end {
+    position:absolute; inset:0; z-index:70; display:none;
+    background:rgba(5,7,10,0.9); color:#fff; align-items:center; justify-content:center; flex-direction:column;
+  }
+  #mp-end .result { font-size:34px; font-weight:bold; margin-bottom:14px; }
+  #mp-end .result.oni-win { color:#ff6a6a; }
+  #mp-end .result.hider-win { color:#7fe0ff; }
+
+  #mp-gun {
+    position:absolute; right:8%; bottom:6%; z-index:36; display:none;
+    width:140px; height:90px; pointer-events:none;
+  }
+  #mp-gun svg { width:100%; height:100%; filter:drop-shadow(0 6px 10px rgba(0,0,0,.6)); }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="state-tag">状態: Idle</div>
+  <div id="paint-mode-tag">🖌 ペイントモード中</div>
+  <div id="wall-hint" style="display:none;"></div>
+  <div id="crosshair"></div>
+
+  <button id="mp-toggle">🕹️ オンライン対戦 (かくれんぼ)</button>
+  <div id="mp-overlay">
+    <div id="mp-panel"></div>
+  </div>
+  <div id="mp-hud">
+    <div class="badge">ロール: -</div>
+    <div class="timer"></div>
+  </div>
+  <div id="mp-blackout">
+    <div class="big">🙈 鬼はただいま目隠し中…隠れる側は自由に散らばってください</div>
+    <div class="timer">60</div>
+  </div>
+  <div id="mp-end">
+    <div class="result">-</div>
+    <button class="mp-btn primary" id="mp-back-to-lobby" style="width:220px;">ロビーに戻る</button>
+  </div>
+  <div id="mp-gun">
+    <svg viewBox="0 0 140 90" xmlns="http://www.w3.org/2000/svg">
+      <rect x="10" y="46" width="90" height="16" rx="3" fill="#333"/>
+      <rect x="70" y="30" width="16" height="34" rx="2" fill="#222"/>
+      <rect x="86" y="52" width="34" height="8" rx="2" fill="#111"/>
+      <rect x="18" y="60" width="14" height="24" rx="2" fill="#222"/>
+    </svg>
+  </div>
+
+  <div id="ui-panel">
+    <h2>🎨 ペイントツール</h2>
+    <div class="row">
+      <label>色</label>
+      <input type="color" id="brush-color" value="#ff6699">
+    </div>
+    <div class="row">
+      <label>太さ</label>
+      <input type="range" id="brush-size" min="2" max="60" value="18">
+      <span id="brush-size-val">18</span>mm
+    </div>
+    <button id="eyedropper-btn">🧪 スポイト (背景クリックで色取得)</button>
+    <div id="recent-colors"></div>
+    <button id="clear-btn">塗りをリセット</button>
+
+    <div id="pose-panel">
+      <label>🧍 ポーズ（1〜8キーでも切替可）</label>
+      <div id="pose-buttons">
+        <button class="pose-btn" data-pose="stand">①直立</button>
+        <button class="pose-btn" data-pose="crouch">②しゃがみ</button>
+        <button class="pose-btn" data-pose="flatten">③べったり</button>
+        <button class="pose-btn" data-pose="sit">④体育座り</button>
+        <button class="pose-btn" data-pose="alert">⑤警戒立ち</button>
+        <button class="pose-btn" data-pose="stretch">⑥伸び</button>
+        <button class="pose-btn" data-pose="curl">⑦丸まる</button>
+        <button class="pose-btn" data-pose="crawl">⑧匍匐前進</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="eyedrop-preview">
+    <div class="ring"></div>
+    <div class="hex">#000000</div>
+  </div>
+
+  <div id="help">
+    WASD: 移動（<b>Shift</b>長押しでダッシュ）/ マウス右ドラッグ: TPSカメラ旋回（ドラッグ中はポインターロックでスムーズ）/ ホイール: ズーム<br>
+    左ドラッグ: キャラクターに描画 (ブラシ位置にリング表示)<br>
+    スポイトON時: 背景にカーソルを合わせると色プレビュー → クリックで取得<br>
+    壁・建物に<b>触れている間にEキー</b>を押すと張り付き（よじ登り）ます。もう一度Eキーで解除（張り付き中はWASDで壁面をよじ登り・横移動）<br>
+    張り付ける壁・障害物の近くで<b>Spaceキー長押し</b>すると上昇します。Spaceを離す、または壁・障害物から離れると自動的に落下します（<b>Ctrlキー</b>で即座に降下も可能）。<br>
+    <b>1〜8</b>: 直立・しゃがみ・べったり(Tポーズ)・体育座り・警戒立ち・伸び・丸まる・匍匐前進の8ポーズを切替。張り付き中にポーズを変えても張り付きは解除されません<br>
+    マップ: 家具・看板・絵画・ネオンサインなど大量配置。<b>壁には衝突判定あり</b>（すり抜け不可）。各壁には通行用の開口部あり／天井あり
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script>
+(function(){
+"use strict";
+
+/* =========================================================
+   基本セットアップ
+   ========================================================= */
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x6fa8c9);
+scene.fog = new THREE.Fog(0x6fa8c9, 16, 50);
+
+const camera = new THREE.PerspectiveCamera(58, window.innerWidth/window.innerHeight, 0.1, 200);
+
+const renderer = new THREE.WebGLRenderer({ antialias:true, preserveDrawingBuffer:true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap; // モザイク状の硬い影ではなく、縁がなめらかな影にする
+renderer.domElement.id = "three-canvas";
+document.getElementById("app").appendChild(renderer.domElement);
+
+window.addEventListener("resize", ()=>{
+  camera.aspect = window.innerWidth/window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// ライト
+const hemi = new THREE.HemisphereLight(0xffffff, 0x444455, 0.9);
+scene.add(hemi);
+const dirLight = new THREE.DirectionalLight(0xffffff, 0.9);
+dirLight.position.set(5, 10, 6);
+dirLight.castShadow = true;
+// 解像度を上げ、シャドウカメラの範囲もキャラクター周辺に絞ることで
+// 1テクセルあたりの面積を小さくし、モザイク状のブロックノイズを軽減する
+dirLight.shadow.mapSize.set(2048, 2048);
+dirLight.shadow.camera.left = -14;
+dirLight.shadow.camera.right = 14;
+dirLight.shadow.camera.top = 14;
+dirLight.shadow.camera.bottom = -14;
+dirLight.shadow.camera.near = 1;
+dirLight.shadow.camera.far = 40;
+dirLight.shadow.bias = -0.0015;   // シャドウアクネ（縞模様）対策
+dirLight.shadow.normalBias = 0.02; // 影の欠け・ノイズをさらに軽減
+dirLight.shadow.radius = 3;       // PCFSoftShadowMap下でのぼかし量（縁を自然に）
+scene.add(dirLight);
+scene.add(dirLight.target);
+const dirLightOffset = dirLight.position.clone(); // 光源からキャラクターへの相対オフセット（向きは維持）
+function updateShadowFollow(){
+  // シャドウカメラの範囲を絞った分、マップ全体で解像度不足にならないよう
+  // 影用ライトをキャラクターの真上あたりに追従させる（光の向き・角度は変えない）
+  dirLight.position.set(
+    character.position.x + dirLightOffset.x,
+    character.position.y + dirLightOffset.y,
+    character.position.z + dirLightOffset.z
+  );
+  dirLight.target.position.copy(character.position);
+  dirLight.target.updateMatrixWorld();
+}
+
+/* =========================================================
+   地面（Littlest Tokyoモデルの読み込みに失敗した時の保険）
+   ========================================================= */
+const groundGeo = new THREE.PlaneGeometry(120, 120);
+const groundMat = new THREE.MeshStandardMaterial({ color: 0x7d8a7a });
+const ground = new THREE.Mesh(groundGeo, groundMat);
+ground.rotation.x = -Math.PI/2;
+ground.position.y = -0.02;
+ground.receiveShadow = true;
+ground.userData.isBackground = true;
+scene.add(ground);
+const groundMeshes = []; // 床面への自動接地（めり込み防止）に使う対象
+groundMeshes.push(ground);
+
+/* =========================================================
+   背景・障害物オブジェクト（スポイト対象 / 擬態判定対象 /
+   当たり判定 / 壁張り付き対象）
+   ========================================================= */
+const backgroundObjects = [];   // スポイト・擬態判定に使う全環境オブジェクト
+const colliderMeshes   = [];    // 当たり判定（移動を遮る）対象
+const colliders         = [];   // {mesh, box:THREE.Box3} のキャッシュ
+
+function registerEnvMesh(mesh, name, opts){
+  opts = opts || {};
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  mesh.userData.isBackground = true;
+  mesh.userData.bgName = name;
+  mesh.userData.isWall = !!opts.isWall;
+  scene.add(mesh);
+  backgroundObjects.push(mesh);
+  if (opts.collidable !== false) {
+    mesh.userData.isStickable = opts.stickable !== false;
+    colliderMeshes.push(mesh);
+  }
+  return mesh;
+}
+
+function makeWall(w,h,d,color,x,y,z,name){
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(w,h,d), new THREE.MeshStandardMaterial({ color: color }));
+  mesh.position.set(x,y,z);
+  return registerEnvMesh(mesh, name, { isWall:true, collidable:true, stickable:true });
+}
+
+function makeProp(geo, color, x,y,z, name, opts){
+  const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: color }));
+  mesh.position.set(x,y,z);
+  return registerEnvMesh(mesh, name, opts || {});
+}
+
+// メッシュごとの「全体を覆う1個の箱」も張り付き時のよじ登り範囲計算用に保持しておく
+const meshFullBoxMap = new Map();
+
+const FINE_CELL = 0.45;         // 当たり判定セルの大きさ（メートル）。細かくするほど壁際を精密に判定できる
+const FINE_MAX_SAMPLES = 9000;  // 1メッシュあたりの最大サンプル頂点数（重い巨大メッシュの間引き用）
+
+// 1つのメッシュを細かいセル(小さなAABB)の集合に分解する。
+// レイキャストを毎フレーム行う代わりに、読み込み時に一度だけ計算しておくことで、
+// 「巨大で複雑な形のメッシュにも当たるが、動作は軽い」当たり判定を実現する。
+function buildFineColliders(mesh){
+  const geo = mesh.geometry;
+  const posAttr = geo && geo.attributes && geo.attributes.position;
+  if (!posAttr) return [];
+  mesh.updateMatrixWorld(true);
+  const matrix = mesh.matrixWorld;
+  const total = posAttr.count;
+  const step = total > FINE_MAX_SAMPLES ? Math.ceil(total / FINE_MAX_SAMPLES) : 1;
+
+  const cellMap = new Map();
+  const v = new THREE.Vector3();
+  for (let i = 0; i < total; i += step) {
+    v.fromBufferAttribute(posAttr, i).applyMatrix4(matrix);
+    const cx = Math.floor(v.x / FINE_CELL);
+    const cz = Math.floor(v.z / FINE_CELL);
+    const key = cx + "_" + cz;
+    let cell = cellMap.get(key);
+    if (!cell) {
+      cell = { minX:v.x, maxX:v.x, minY:v.y, maxY:v.y, minZ:v.z, maxZ:v.z };
+      cellMap.set(key, cell);
+    } else {
+      if (v.x < cell.minX) cell.minX = v.x;
+      if (v.x > cell.maxX) cell.maxX = v.x;
+      if (v.y < cell.minY) cell.minY = v.y;
+      if (v.y > cell.maxY) cell.maxY = v.y;
+      if (v.z < cell.minZ) cell.minZ = v.z;
+      if (v.z > cell.maxZ) cell.maxZ = v.z;
+    }
+  }
+
+  const result = [];
+  cellMap.forEach(cell=>{
+    let { minX, maxX, minY, maxY, minZ, maxZ } = cell;
+    if (maxX - minX < 0.06) { minX -= 0.06; maxX += 0.06; }
+    if (maxZ - minZ < 0.06) { minZ -= 0.06; maxZ += 0.06; }
+    const box = new THREE.Box3(new THREE.Vector3(minX,minY,minZ), new THREE.Vector3(maxX,maxY,maxZ));
+    result.push({ mesh, box });
+  });
+  return result;
+}
+
+function rebuildColliders(){
+  colliders.length = 0;
+  meshFullBoxMap.clear();
+  // 以前は buildFineColliders() で各メッシュを細かいセルに分解していたが、
+  // このゲームのマップは(複雑な外部3Dモデルではなく)すべて単純な箱・柱などの
+  // プリミティブ形状でできており、頂点は角にしかない。そのため「頂点があるところ
+  // だけをセル化する」方式だと、壁や家具の面の途中に判定セルがほとんど存在せず、
+  // 大きな穴(すり抜けられる場所)ができてしまっていた。
+  // 各パーツ(壁1枚・机の脚1本など)はもともと個別のメッシュとして登録されているため、
+  // メッシュ全体を覆う外接ボックスをそのまま1つの当たり判定として使えば、
+  // 分解による隙間なく、かつ十分に精密な判定になる。
+  colliderMeshes.forEach(m=>{
+    const fullBox = new THREE.Box3().setFromObject(m);
+    meshFullBoxMap.set(m, fullBox);
+    colliders.push({ mesh:m, box: fullBox });
+  });
+}
+
+// --- プレイエリア外周（見えない当たり判定のみの壁。City読み込み後に実寸へ合わせて再配置する） ---
+const boundMeshes = {};
+function makeInvisibleBound(name){
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(1,1,1), new THREE.MeshBasicMaterial({ visible:false }));
+  mesh.userData.isWall = true;
+  mesh.userData.bgName = name;
+  mesh.userData.isStickable = false;
+  colliderMeshes.push(mesh);
+  scene.add(mesh);
+  boundMeshes[name] = mesh;
+}
+["北","南","東","西"].forEach(makeInvisibleBound);
+
+let mapHalf = 26; // プレイヤーが出られる範囲の半径（layoutBoundsで更新される）
+function layoutBounds(half, height){
+  mapHalf = half;
+  // 地面の上(y=0)から十分な高さまでだけでなく、地面の下(BELOW_GROUND)まで壁を
+  // 伸ばしておく。こうすることで、よじ登り・ジャンプで上を越えたり、地面の縁の
+  // 段差や隙間から下をすり抜けたりしてエリア外に出てしまうのを防ぐ。
+  const BELOW_GROUND = 10;
+  const BH = height + BELOW_GROUND;
+  const centerY = (height - BELOW_GROUND) / 2;
+  boundMeshes["北"].geometry.dispose();
+  boundMeshes["北"].geometry = new THREE.BoxGeometry(half*2, BH, 0.6);
+  boundMeshes["北"].position.set(0, centerY, -half);
+  boundMeshes["南"].geometry.dispose();
+  boundMeshes["南"].geometry = new THREE.BoxGeometry(half*2, BH, 0.6);
+  boundMeshes["南"].position.set(0, centerY, half);
+  boundMeshes["東"].geometry.dispose();
+  boundMeshes["東"].geometry = new THREE.BoxGeometry(0.6, BH, half*2);
+  boundMeshes["東"].position.set(half, centerY, 0);
+  boundMeshes["西"].geometry.dispose();
+  boundMeshes["西"].geometry = new THREE.BoxGeometry(0.6, BH, half*2);
+  boundMeshes["西"].position.set(-half, centerY, 0);
+}
+layoutBounds(26, 4); // City読み込み完了までの仮の範囲
+
+/* =========================================================
+   マップ：バックルームズ風
+   ■ 8x8グリッドの部屋を壁で区切り、ランダムに開口部を作る
+   ■ 各部屋に「意味のある家具」（机・椅子・本棚・キャビネット・
+     ソファ・蛍光灯・自販機・段ボールの山など）をグループで
+     組み立て、ランダムな角度でカオスに詰め込む
+   ■ 家具はTHREE.Groupで組んでからワールド変換をベイク→
+     registerEnvMesh()で登録することで回転が正しく反映される
+   ========================================================= */
+const GRID_N   = 3;
+const CELL     = 7;
+const MAP_HALF = GRID_N * CELL / 2;   // = 28
+const WALL_H   = 3.2;
+const WALL_T   = 0.2;
+
+/* ── 乱数 ── */
+const rngSeedState = { s: 99991 };
+function rng(){ rngSeedState.s=(rngSeedState.s*1664525+1013904223)&0xffffffff; return (rngSeedState.s>>>0)/0xffffffff; }
+function rngRange(a,b){ return a+rng()*(b-a); }
+function pick(arr){ return arr[Math.floor(rng()*arr.length)]; }
+function cellCenter(i){ return (i-(GRID_N-1)/2)*CELL; }
+
+/* ── カラーパレット ── */
+// 壁：くすんだ黄色〜黄緑（バックルームズの蛍光灯下の壁紙感）
+const WALL_COLORS=[0xd4c97a,0xc8bc5f,0xcecb7e,0xb9b25a,0xd0c88a,0xbfba72,0xc5c27c];
+// 家具：ビビッドカラー大量（カメレオンの擬態対象として）
+const FURN_COLORS=[
+  0xff4444,0xff7700,0xffcc00,0x88dd00,0x00cc66,0x00bbbb,0x2299ff,0x5544ff,
+  0xaa33ff,0xff33cc,0xff99aa,0xffddaa,0xaaffcc,0xaaddff,0xddaaff,
+  0xcc2200,0x885500,0x006633,0x003388,0x550088,
+  0xff6666,0xffaa55,0xffee77,0x99ff66,0x55ffdd,0x88bbff,0xcc88ff,
+  0xa0522d,0x8b4513,0xdeb887,0x708090,0x4682b4,0xb22222,0x228b22,
+];
+function fclr(){ return pick(FURN_COLORS); }
+function wclr(){ return pick(WALL_COLORS); }
+
+/* ── 床：薄汚れた黄みがかりのカーペット（バックルームズのあの感じ） ── */
+ground.geometry.dispose();
+ground.geometry = new THREE.PlaneGeometry(MAP_HALF*2.4, MAP_HALF*2.4, 32, 32);
+{
+  const pos = ground.geometry.attributes.position;
+  const col = new Float32Array(pos.count*3);
+  for(let i=0;i<pos.count;i++){
+    const c=new THREE.Color(pick([0xc8b560,0xb8a450,0xc0b870,0xa89840,0xd0c07a]));
+    c.lerp(new THREE.Color(0x3a3020),0.35+rng()*0.2);
+    col[i*3]=c.r; col[i*3+1]=c.g; col[i*3+2]=c.b;
+  }
+  ground.geometry.setAttribute("color",new THREE.BufferAttribute(col,3));
+}
+ground.material.vertexColors=true;
+ground.material.needsUpdate=true;
+
+/* ── 壁グリッド：内壁は全て「通行用の開口部(ドア)」付きで生成し、
+   一番外側（マップの境界＝border）だけは穴なしの1枚壁のまま残す。
+   これにより、壁自体は（すり抜け不可の）当たり判定を持ちつつも、
+   開口部を通って全ての部屋を行き来できるようにする。
+   境界壁に穴を開けるとマップ外に出られてしまうため、そこは対象外。 ── */
+const DOOR_WIDTH = 1.8; // 人が通れる開口部の幅
+function makeWallSegmentPair(axis, color, cx, cz, name){
+  // axis: "V"(縦壁=X方向の仕切り, Z方向に伸びる) / "H"(横壁=Z方向の仕切り, X方向に伸びる)
+  const segLen = (CELL - DOOR_WIDTH) / 2;
+  const offset = DOOR_WIDTH/2 + segLen/2;
+  if (axis === "V") {
+    const px=-MAP_HALF+cx*CELL, pz=cellCenter(cz);
+    makeWall(WALL_T,WALL_H,segLen,color,px,WALL_H/2,pz-offset,name+"_a");
+    makeWall(WALL_T,WALL_H,segLen,color,px,WALL_H/2,pz+offset,name+"_b");
+  } else {
+    const px=cellCenter(cx), pz=-MAP_HALF+cz*CELL;
+    makeWall(segLen,WALL_H,WALL_T,color,px-offset,WALL_H/2,pz,name+"_a");
+    makeWall(segLen,WALL_H,WALL_T,color,px+offset,WALL_H/2,pz,name+"_b");
+  }
+}
+// 縦壁（X方向の仕切り）
+for(let cz=0;cz<GRID_N;cz++){
+  for(let cx=0;cx<=GRID_N;cx++){
+    const border=(cx===0||cx===GRID_N);
+    const px=-MAP_HALF+cx*CELL, pz=cellCenter(cz);
+    if (border) {
+      makeWall(WALL_T,WALL_H,CELL,wclr(),px,WALL_H/2,pz,"壁V_"+cx+"_"+cz);
+    } else {
+      makeWallSegmentPair("V", wclr(), cx, cz, "壁V_"+cx+"_"+cz);
+    }
+  }
+}
+// 横壁（Z方向の仕切り）
+for(let cx=0;cx<GRID_N;cx++){
+  for(let cz=0;cz<=GRID_N;cz++){
+    const border=(cz===0||cz===GRID_N);
+    const px=cellCenter(cx), pz=-MAP_HALF+cz*CELL;
+    if (border) {
+      makeWall(CELL,WALL_H,WALL_T,wclr(),px,WALL_H/2,pz,"壁H_"+cx+"_"+cz);
+    } else {
+      makeWallSegmentPair("H", wclr(), cx, cz, "壁H_"+cx+"_"+cz);
+    }
+  }
+}
+
+/* ── 家具ベイク関数：GroupをWorldに展開→各meshを個別登録 ── */
+let _furnId=0;
+function placeFurniture(buildFn, wx, wz, rotY){
+  const g=new THREE.Group();
+  g.rotation.y=rotY;
+  buildFn(g);
+  g.updateMatrixWorld(true);
+  const meshes=[];
+  g.traverse(c=>{ if(c.isMesh) meshes.push(c); });
+  meshes.forEach(m=>{
+    const wp=new THREE.Vector3(), wq=new THREE.Quaternion(), ws=new THREE.Vector3();
+    m.getWorldPosition(wp); m.getWorldQuaternion(wq); m.getWorldScale(ws);
+    m.position.set(wx+wp.x, wp.y, wz+wp.z);
+    m.quaternion.copy(wq);
+    m.scale.copy(ws);
+    if(m.parent) m.parent.remove(m);
+    registerEnvMesh(m, (m.userData.label||"家具")+(_furnId++), {collidable:true,stickable:true});
+  });
+}
+
+function box(w,h,d,color,lbl){
+  const m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d), new THREE.MeshStandardMaterial({color,roughness:rngRange(0.5,0.9),metalness:rngRange(0,0.12)}));
+  m.userData.label=lbl||"家具";
+  return m;
+}
+function cyl(r,h,color,lbl,segs=10){
+  const m=new THREE.Mesh(new THREE.CylinderGeometry(r,r,h,segs), new THREE.MeshStandardMaterial({color,roughness:0.7}));
+  m.userData.label=lbl||"家具";
+  return m;
+}
+function cone(r,h,color,lbl,segs=10){
+  const m=new THREE.Mesh(new THREE.ConeGeometry(r,h,segs), new THREE.MeshStandardMaterial({color,roughness:0.7}));
+  m.userData.label=lbl||"家具";
+  return m;
+}
+function add(g,m,x,y,z,ry=0){ m.position.set(x,y,z); m.rotation.y=ry; g.add(m); }
+
+/* ── 個別家具ビルダー ── */
+
+// 机（天板 + 4本脚）
+function buildDesk(g){
+  const W=rngRange(1.1,1.7), D=rngRange(0.6,0.9), legH=rngRange(0.68,0.78), topH=0.07;
+  const tc=fclr(), lc=fclr();
+  add(g, box(W,topH,D, tc,"机天板"), 0,legH+topH/2,0);
+  const ox=W/2-0.07, oz=D/2-0.07;
+  [[-1,-1],[1,-1],[-1,1],[1,1]].forEach(([sx,sz])=>
+    add(g, box(0.08,legH,0.08,lc,"机脚"), sx*ox, legH/2, sz*oz));
+  // 天板の下に引き出しっぽいもの
+  if(rng()<0.6){
+    add(g, box(W*0.55,0.15,D*0.55,fclr(),"引き出し"), rngRange(-0.1,0.1),legH-0.1,0);
+  }
+}
+
+// 椅子（座面 + 背もたれ + 4本脚）
+function buildChair(g){
+  const sH=rngRange(0.43,0.50), sc=fclr(), fc=fclr();
+  add(g, box(0.44,0.07,0.44,sc,"椅子座面"), 0,sH,0);
+  add(g, box(0.44,0.55,0.06,fclr(),"椅子背"), 0,sH+0.28,-0.19);
+  [[-1,-1],[1,-1],[-1,1],[1,1]].forEach(([sx,sz])=>
+    add(g, box(0.07,sH,0.07,fc,"椅子脚"), sx*0.17,sH/2,sz*0.17));
+}
+
+// 本棚（縦枠 + 横板 + カラフルな本）
+function buildBookshelf(g){
+  const W=rngRange(1.0,1.6), H=rngRange(1.8,2.5), D=rngRange(0.30,0.42);
+  const fc=fclr();
+  // 枠：左右縦板 + 上下板
+  add(g, box(0.05,H,D,fc,"棚左板"), -W/2+0.025,H/2,0);
+  add(g, box(0.05,H,D,fc,"棚右板"),  W/2-0.025,H/2,0);
+  add(g, box(W,0.05,D,fc,"棚底板"),  0,0.025,0);
+  add(g, box(W,0.05,D,fc,"棚天板"),  0,H-0.025,0);
+  const shelfN=3+Math.floor(rng()*3);
+  for(let i=1;i<=shelfN;i++){
+    add(g, box(W*0.92,0.04,D*0.9,fclr(),"棚板"), 0,(H/(shelfN+1))*i,0);
+  }
+  // 本
+  const bookN=6+Math.floor(rng()*8);
+  for(let i=0;i<bookN;i++){
+    const bw=rngRange(0.04,0.08), bh=rngRange(0.18,0.30);
+    const bx=rngRange(-W/2+0.12,W/2-0.12);
+    const by=rngRange(0.12,H-0.12);
+    const bm=box(bw,bh,D*0.75,fclr(),"本");
+    bm.rotation.z=rngRange(-0.2,0.2);
+    add(g,bm,bx,by,0);
+  }
+}
+
+// キャビネット / ロッカー
+function buildCabinet(g){
+  const W=rngRange(0.55,0.9), H=rngRange(1.5,2.1), D=rngRange(0.45,0.65);
+  const bc=fclr(), hc=0x222222;
+  add(g, box(W,H,D,bc,"キャビネット本体"), 0,H/2,0);
+  // 仕切り線（見た目の扉っぽさ）
+  add(g, box(W*0.96,0.03,D*0.96,hc,"扉線"), 0,H/2,0);
+  // 取っ手
+  add(g, box(0.05,0.15,0.05,hc,"取っ手"), W*0.22,H*0.58,-D/2-0.03);
+}
+
+// ソファ（座面 + 背もたれ + 左右肘掛け）
+function buildSofa(g){
+  const W=rngRange(1.4,2.1), sH=0.42, D=0.72;
+  const sc=fclr(), ac=fclr();
+  add(g, box(W,sH,D,sc,"ソファ座面"), 0,sH/2,0);
+  add(g, box(W,0.65,0.14,fclr(),"ソファ背"), 0,sH+0.33,-D/2+0.07);
+  add(g, box(0.16,0.55,D,ac,"ソファ肘L"), -W/2+0.08,0.275,0);
+  add(g, box(0.16,0.55,D,ac,"ソファ肘R"),  W/2-0.08,0.275,0);
+  // クッション（上に乗った小さな箱）
+  if(rng()<0.7){
+    const n=1+Math.floor(rng()*3);
+    for(let i=0;i<n;i++)
+      add(g, box(rngRange(0.3,0.45),rngRange(0.15,0.22),rngRange(0.3,0.45),fclr(),"クッション"),
+          rngRange(-W/3,W/3),sH+0.14,rngRange(-0.05,0.05));
+  }
+}
+
+// 蛍光灯（天井に張り付く細い管）
+function buildFluorescentLight(g){
+  const W=rngRange(1.0,1.8);
+  const frame=box(W+0.08,0.06,0.14,0x888880,"蛍光灯枠");
+  add(g, frame, 0, WALL_H-0.04, 0);
+  const tube=new THREE.Mesh(new THREE.CylinderGeometry(0.025,0.025,W,8),
+    new THREE.MeshStandardMaterial({color:0xffffee,emissive:0xfff8d0,emissiveIntensity:0.9}));
+  tube.rotation.z=Math.PI/2; tube.userData.label="蛍光管";
+  add(g, tube, 0, WALL_H-0.04, 0);
+}
+
+// 自販機（大きな箱 + ガラス面 + カラフルなボタン群）
+function buildVendingMachine(g){
+  const bc=fclr();
+  add(g, box(0.85,1.80,0.55,bc,"自販機本体"), 0,0.90,0);
+  add(g, box(0.60,0.90,0.02,0xaaccff,"自販機ガラス"), 0,1.10,-0.28);
+  const btnColors=[0xff3333,0x33aaff,0xffcc00,0x44dd44,0xff88cc];
+  for(let r=0;r<3;r++) for(let c=0;c<2;c++)
+    add(g, box(0.10,0.08,0.02,btnColors[(r*2+c)%5],"ボタン"), (c-0.5)*0.15,0.55+r*0.13,-0.28);
+}
+
+// 段ボール箱の山
+function buildCardboardStack(g){
+  const n=2+Math.floor(rng()*4);
+  let y=0;
+  for(let i=0;i<n;i++){
+    const s=rngRange(0.4,0.75);
+    const jx=rngRange(-0.15,0.15), jz=rngRange(-0.15,0.15);
+    const m=box(s,s,s,pick([0xd4a464,0xc89a50,0xbb8840,0xe0b870]),"段ボール");
+    m.rotation.y=rngRange(0,Math.PI*2);
+    if(rng()<0.25){ m.rotation.z=rngRange(-0.4,0.4); }
+    add(g,m, jx, y+s/2, jz);
+    y+=s*rngRange(0.88,1.0);
+  }
+}
+
+// オフィスチェア（座面 + 背もたれ + ポール + 星型ベース）
+function buildOfficeChair(g){
+  const sc=fclr();
+  add(g, box(0.46,0.08,0.46,sc,"Oチェア座面"), 0,0.48,0);
+  add(g, box(0.46,0.55,0.07,fclr(),"Oチェア背"), 0,0.76,-0.20);
+  add(g, cyl(0.04,0.42,0x333333,"Oチェアポール"), 0,0.21,0);
+  // 5本ベース
+  for(let i=0;i<5;i++){
+    const a=i/5*Math.PI*2;
+    const arm=box(0.38,0.05,0.07,0x444444,"Oベース腕");
+    arm.rotation.y=a;
+    add(g,arm, Math.sin(a)*0.19,0.05,Math.cos(a)*0.19);
+  }
+}
+
+// ホワイトボード（細いフレームに白い板 + スタンド2本）
+function buildWhiteboard(g){
+  const W=rngRange(1.2,1.8), H=rngRange(0.9,1.3);
+  const baseH=rngRange(0.9,1.2);
+  add(g, box(W+0.06,H+0.06,0.05,0xaaaaaa,"WBフレーム"), 0,baseH+H/2,0);
+  add(g, box(W,H,0.03,0xfafafa,"WB面"), 0,baseH+H/2,-0.01);
+  [-W/3,W/3].forEach(ox=>
+    add(g, box(0.04,baseH,0.04,0x888888,"WBスタンド"), ox,baseH/2,0));
+  // マーカー置き
+  add(g, box(W*0.7,0.04,0.06,0x888888,"マーカー台"), 0,baseH,-0.01);
+}
+
+// 倒れた椅子（普通の椅子を横に倒した状態）
+function buildToppledChair(g){
+  buildChair(g);
+  g.rotation.z=Math.PI/2 + rngRange(-0.3,0.3);
+  g.rotation.x=rngRange(-0.3,0.3);
+  g.position.y=0.25;
+}
+
+// 支柱（バックルームズらしいコンクリート柱）
+function buildPillar(g){
+  const r=rngRange(0.2,0.35);
+  add(g, cyl(r,WALL_H,wclr(),"支柱"),0,WALL_H/2,0);
+  // 天井 / 床のベース
+  add(g, box(r*3.5,0.12,r*3.5,0x888870,"柱ベース"),0,0.06,0);
+  add(g, box(r*3.5,0.12,r*3.5,0x888870,"柱頂"),0,WALL_H-0.06,0);
+}
+
+// コピー機
+function buildCopier(g){
+  const bc=fclr();
+  add(g, box(0.62,0.95,0.60,bc,"コピー機本体"),0,0.475,0);
+  add(g, box(0.60,0.05,0.58,0xf0f0f0,"コピー蓋"),0,0.975,0);
+  add(g, box(0.45,0.02,0.38,0x88aacc,"コピー画面"),0,0.65,-0.31);
+  add(g, box(0.42,0.10,0.02,0x333333,"コピートレー"),0,0.55,-0.31);
+}
+
+// ゴミ箱
+function buildTrashCan(g){
+  const r=rngRange(0.18,0.27), h=rngRange(0.35,0.55);
+  add(g, new THREE.Mesh(new THREE.CylinderGeometry(r,r*0.8,h,14),
+    new THREE.MeshStandardMaterial({color:fclr()})), 0,h/2,0);
+}
+
+// テーブルランプ
+function buildTableLamp(g){
+  add(g, cyl(0.04,0.40,0x555555,"ランプ柱"),0,0.24,0);
+  const shade=new THREE.Mesh(new THREE.ConeGeometry(0.22,0.28,12),
+    new THREE.MeshStandardMaterial({color:fclr(),emissive:0xffee88,emissiveIntensity:0.3,side:THREE.DoubleSide}));
+  shade.userData.label="ランプシェード";
+  add(g,shade,0,0.59,0);
+}
+
+// 散乱した書類・雑誌（薄い平べったい箱をランダムに重ねる）
+function buildPaperPile(g){
+  const n=3+Math.floor(rng()*6);
+  let y=0;
+  for(let i=0;i<n;i++){
+    const w=rngRange(0.25,0.45), d=rngRange(0.18,0.35), h=0.015;
+    const m=box(w,h,d,pick([0xffffff,0xf5f0e0,0xe8e0d0,0xfafafa,fclr()]),"書類");
+    m.rotation.y=rngRange(0,Math.PI*2);
+    add(g,m,rngRange(-0.1,0.1),y+h/2,rngRange(-0.1,0.1));
+    y+=h;
+  }
+}
+
+/* ── カラーのキャンバス色変換ヘルパー ── */
+function fclrHex(){ return "#"+pick(FURN_COLORS).toString(16).padStart(6,"0"); }
+function numHex(n){ return "#"+n.toString(16).padStart(6,"0"); }
+
+/* ── 看板（イラスト入り・ポール型） ── */
+function buildSign(g){
+  const W=rngRange(0.9,1.8), H=rngRange(0.5,0.9);
+  const postH=rngRange(1.2,2.2);
+  add(g, box(W+0.12,H+0.12,0.07, 0x772211,"看板フレーム"),0,postH+H/2,0);
+  const canvas=document.createElement("canvas");
+  canvas.width=256; canvas.height=128;
+  const ctx=canvas.getContext("2d");
+  ctx.fillStyle=fclrHex(); ctx.fillRect(0,0,256,128);
+  const type=Math.floor(rng()*6);
+  if(type===0){
+    // 星
+    ctx.fillStyle="#ffff00";
+    ctx.beginPath();
+    for(let i=0;i<10;i++){
+      const a=(i*Math.PI/5)-Math.PI/2;
+      const r=i%2===0?50:22;
+      i===0?ctx.moveTo(128+Math.cos(a)*r,64+Math.sin(a)*r):ctx.lineTo(128+Math.cos(a)*r,64+Math.sin(a)*r);
+    }
+    ctx.closePath(); ctx.fill();
+  } else if(type===1){
+    // テキスト看板
+    ctx.fillStyle="#ffffff"; ctx.font="bold 44px Arial"; ctx.textAlign="center"; ctx.textBaseline="middle";
+    const texts=["SALE!","OPEN!","EXIT","SHOP","BAR","CAFE","???"]; ctx.fillText(pick(texts),128,64);
+  } else if(type===2){
+    // ハート
+    ctx.fillStyle="#ff88aa";
+    ctx.beginPath(); ctx.moveTo(128,95);
+    ctx.bezierCurveTo(20,60,20,-20,128,40);
+    ctx.bezierCurveTo(236,-20,236,60,128,95);
+    ctx.fill();
+  } else if(type===3){
+    // 格子模様
+    for(let i=0;i<4;i++) for(let j=0;j<2;j++){
+      ctx.fillStyle=fclrHex(); ctx.fillRect(i*64,j*64,64,64);
+    }
+  } else if(type===4){
+    // 矢印
+    ctx.fillStyle="#ffffff"; ctx.font="bold 80px Arial"; ctx.textAlign="center"; ctx.textBaseline="middle";
+    ctx.fillText(pick(["→","←","↑","↓","⚡","★","✦"]),128,64);
+  } else {
+    // ストライプ
+    for(let i=0;i<8;i++){
+      ctx.fillStyle=fclrHex(); ctx.fillRect(i*32,0,32,128);
+    }
+    ctx.fillStyle="#ffffff"; ctx.font="bold 30px Arial"; ctx.textAlign="center"; ctx.textBaseline="middle";
+    ctx.fillText(pick(["OPEN","GO","YES","WOW"]),128,64);
+  }
+  const tex=new THREE.CanvasTexture(canvas);
+  const face=new THREE.Mesh(new THREE.BoxGeometry(W,H,0.04),new THREE.MeshStandardMaterial({map:tex}));
+  face.userData.label="看板面";
+  add(g,face,0,postH+H/2,-0.04);
+  add(g, box(0.07,postH,0.07,0x553311,"看板ポスト"),0,postH/2,0);
+}
+
+/* ── 絵画（壁掛け風イーゼル型） ── */
+function buildPainting(g){
+  const W=rngRange(0.6,1.3), H=rngRange(0.5,1.0);
+  const mountH=rngRange(1.0,2.0);
+  // 額縁
+  add(g, box(W+0.1,H+0.1,0.06,0x5a3a1a,"額縁"),0,mountH+H/2,0);
+  const canvas=document.createElement("canvas");
+  canvas.width=256; canvas.height=256;
+  const ctx=canvas.getContext("2d");
+  const style=Math.floor(rng()*5);
+  if(style===0){
+    // 風景（青空＋草原＋太陽）
+    ctx.fillStyle="#87ceeb"; ctx.fillRect(0,0,256,160);
+    ctx.fillStyle="#3a8f3a"; ctx.fillRect(0,160,256,96);
+    ctx.fillStyle="#ffdd44"; ctx.beginPath(); ctx.arc(200,55,38,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle="#5a3010"; ctx.fillRect(95,128,14,60);
+    ctx.fillStyle="#22aa22"; ctx.beginPath(); ctx.arc(102,108,38,0,Math.PI*2); ctx.fill();
+    // 雲
+    ctx.fillStyle="rgba(255,255,255,0.85)";
+    [40,90,160].forEach(cx=>{ ctx.beginPath(); ctx.arc(cx,45,18,0,Math.PI*2); ctx.fill(); ctx.beginPath(); ctx.arc(cx+18,40,14,0,Math.PI*2); ctx.fill(); });
+  } else if(style===1){
+    // 抽象画
+    ctx.fillStyle="#f5f0e0"; ctx.fillRect(0,0,256,256);
+    for(let i=0;i<16;i++){
+      ctx.fillStyle=fclrHex(); ctx.globalAlpha=0.7;
+      const t=Math.floor(rng()*3);
+      if(t===0){ ctx.fillRect(rng()*256,rng()*256,rng()*100+10,rng()*100+10); }
+      else if(t===1){ ctx.beginPath(); ctx.arc(rng()*256,rng()*256,rng()*55+8,0,Math.PI*2); ctx.fill(); }
+      else { ctx.beginPath(); ctx.moveTo(rng()*256,rng()*256); ctx.lineTo(rng()*256,rng()*256); ctx.lineTo(rng()*256,rng()*256); ctx.closePath(); ctx.fill(); }
+    }
+    ctx.globalAlpha=1;
+  } else if(style===2){
+    // 顔のシンプル似顔絵
+    ctx.fillStyle="#f0ddc0"; ctx.fillRect(0,0,256,256);
+    ctx.fillStyle="#ffe0b2"; ctx.beginPath(); ctx.ellipse(128,115,60,75,0,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle="#6b3a1f"; ctx.beginPath(); ctx.ellipse(128,68,65,38,0,0,Math.PI*2); ctx.fill();
+    [104,152].forEach(ex=>{ ctx.fillStyle="#3a2010"; ctx.beginPath(); ctx.ellipse(ex,110,9,6,0,0,Math.PI*2); ctx.fill(); });
+    ctx.strokeStyle="#993300"; ctx.lineWidth=3.5; ctx.beginPath(); ctx.arc(128,135,14,0.2,Math.PI-0.2); ctx.stroke();
+    ctx.fillStyle="#e8c090"; ctx.fillRect(88,180,80,76);
+    ctx.fillStyle=fclrHex(); ctx.fillRect(78,205,100,55);
+  } else if(style===3){
+    // 夜空
+    ctx.fillStyle="#0a0a2e"; ctx.fillRect(0,0,256,256);
+    for(let i=0;i<60;i++){
+      const r=rng()*2+0.5;
+      ctx.fillStyle=`rgba(255,255,255,${0.4+rng()*0.6})`;
+      ctx.beginPath(); ctx.arc(rng()*256,rng()*160,r,0,Math.PI*2); ctx.fill();
+    }
+    ctx.fillStyle="#ffee88"; ctx.beginPath(); ctx.arc(180,40,22,0,Math.PI*2); ctx.fill();
+    // 山のシルエット
+    ctx.fillStyle="#1a1a4a";
+    ctx.beginPath(); ctx.moveTo(0,200); ctx.lineTo(60,140); ctx.lineTo(120,180); ctx.lineTo(180,120); ctx.lineTo(256,160); ctx.lineTo(256,256); ctx.lineTo(0,256); ctx.fill();
+  } else {
+    // ポップアートっぽいドットパターン
+    ctx.fillStyle="#f0f000"; ctx.fillRect(0,0,256,256);
+    for(let i=0;i<8;i++) for(let j=0;j<8;j++){
+      ctx.fillStyle=fclrHex(); ctx.beginPath(); ctx.arc(i*32+16,j*32+16,12,0,Math.PI*2); ctx.fill();
+    }
+  }
+  const tex=new THREE.CanvasTexture(canvas);
+  const pic=new THREE.Mesh(new THREE.BoxGeometry(W,H,0.03),new THREE.MeshStandardMaterial({map:tex}));
+  pic.userData.label="絵画面";
+  add(g,pic,0,mountH+H/2,-0.04);
+  // イーゼル脚（V字）
+  add(g,box(0.04,mountH,0.04,0x886644,"イーゼル脚L"),(-W/3),mountH/2,0.1);
+  add(g,box(0.04,mountH,0.04,0x886644,"イーゼル脚R"),(W/3),mountH/2,0.1);
+}
+
+/* ── ネオン看板（壁立て型・光るテキスト） ── */
+function buildNeonSign(g){
+  const W=rngRange(0.8,1.6), H=rngRange(0.3,0.6);
+  const mountH=rngRange(1.4,2.6);
+  const canvas=document.createElement("canvas");
+  canvas.width=256; canvas.height=128;
+  const ctx=canvas.getContext("2d");
+  ctx.fillStyle="#0a0a18"; ctx.fillRect(0,0,256,128);
+  const neonColors=["#ff00ff","#00ffff","#ffff00","#ff8800","#00ff88","#ff4488","#44aaff"];
+  const nc=pick(neonColors);
+  ctx.shadowColor=nc; ctx.shadowBlur=22;
+  ctx.fillStyle=nc; ctx.font="bold 50px monospace"; ctx.textAlign="center"; ctx.textBaseline="middle";
+  ctx.fillText(pick(["NEON","BAR","CAFE","OPEN","EXIT","DINER","★★★"]),128,64);
+  const tex=new THREE.CanvasTexture(canvas);
+  const m=new THREE.Mesh(new THREE.BoxGeometry(W,H,0.05),
+    new THREE.MeshStandardMaterial({map:tex,emissive:new THREE.Color(nc),emissiveIntensity:0.4}));
+  m.userData.label="ネオン看板";
+  add(g,m,0,mountH+H/2,0);
+}
+
+/* ── ポスター（縦長カラフル） ── */
+function buildPoster(g){
+  const W=rngRange(0.45,0.85), H=rngRange(0.7,1.3);
+  const mountH=rngRange(0.8,1.8);
+  const canvas=document.createElement("canvas");
+  canvas.width=128; canvas.height=256;
+  const ctx=canvas.getContext("2d");
+  ctx.fillStyle=fclrHex(); ctx.fillRect(0,0,128,256);
+  for(let i=0;i<5;i++){ ctx.fillStyle="rgba(255,255,255,0.15)"; ctx.fillRect(0,i*52+4,128,26); }
+  ctx.fillStyle="#ffffff"; ctx.font="bold 22px sans-serif"; ctx.textAlign="center";
+  const titles=["EVENT","SHOW","FESTIVAL","ART","MUSIC","SALE","OPEN"];
+  ctx.fillText(pick(titles),64,50);
+  ctx.font="16px sans-serif"; ctx.fillText("★★★★★",64,85);
+  ctx.fillText("2026",64,115);
+  // ランダム色ボール装飾
+  for(let i=0;i<8;i++){
+    ctx.fillStyle=fclrHex(); ctx.beginPath(); ctx.arc(rng()*100+14,rng()*100+150,6,0,Math.PI*2); ctx.fill();
+  }
+  const tex=new THREE.CanvasTexture(canvas);
+  const m=new THREE.Mesh(new THREE.BoxGeometry(W,H,0.02),new THREE.MeshStandardMaterial({map:tex}));
+  m.userData.label="ポスター";
+  add(g,m,0,mountH+H/2,0);
+}
+
+/* ── 黒板（授業っぽい） ── */
+function buildBlackboard(g){
+  const W=rngRange(1.3,2.0), H=rngRange(0.9,1.4);
+  const baseH=rngRange(0.8,1.1);
+  add(g, box(W+0.1,H+0.1,0.06,0x554422,"黒板フレーム"),0,baseH+H/2,0);
+  const canvas=document.createElement("canvas");
+  canvas.width=256; canvas.height=128;
+  const ctx=canvas.getContext("2d");
+  ctx.fillStyle="#1a3a1a"; ctx.fillRect(0,0,256,128);
+  // チョーク文字
+  ctx.fillStyle="rgba(255,255,255,0.85)"; ctx.font="bold 28px monospace"; ctx.textAlign="center"; ctx.textBaseline="middle";
+  const texts2=["E=mc²","Hello!","π≈3.14","y=ax+b","A+B=C","????","STUDY"]; ctx.fillText(pick(texts2),128,50);
+  ctx.fillStyle="rgba(255,255,200,0.7)"; ctx.font="16px monospace"; ctx.fillText(pick(["授業中","LESSON","CHECK","TEST"]),128,90);
+  // チョークのかすれ感
+  for(let i=0;i<30;i++){
+    ctx.fillStyle="rgba(255,255,255,0.08)"; ctx.fillRect(rng()*256,rng()*128,rng()*20+2,2);
+  }
+  const tex=new THREE.CanvasTexture(canvas);
+  const bd=new THREE.Mesh(new THREE.BoxGeometry(W,H,0.03),new THREE.MeshStandardMaterial({map:tex}));
+  bd.userData.label="黒板面";
+  add(g,bd,0,baseH+H/2,-0.02);
+  [-W/3,W/3].forEach(ox=>add(g,box(0.05,baseH,0.05,0x443322,"黒板スタンド"),ox,baseH/2,0));
+  add(g,box(W*0.75,0.04,0.07,0x444422,"チョーク台"),0,baseH,-0.01);
+}
+
+/* ── ガチャガチャ機（カプセルトイ） ── */
+function buildGachapon(g){
+  const bc=fclrHex();
+  add(g, box(0.45,1.10,0.42,bc,"ガチャ本体"),0,0.55,0);
+  // 丸い球入れ部分（球体で代用）
+  const dome=new THREE.Mesh(new THREE.SphereGeometry(0.22,12,8,0,Math.PI*2,0,Math.PI/2),
+    new THREE.MeshStandardMaterial({color:0xaaddff,transparent:true,opacity:0.6}));
+  dome.userData.label="ガチャドーム";
+  add(g,dome,0,1.12,0);
+  // カプセル（カラフルな小さい球）
+  for(let i=0;i<5;i++){
+    const cap=new THREE.Mesh(new THREE.SphereGeometry(0.06,8,6),
+      new THREE.MeshStandardMaterial({color:parseInt(fclrHex().slice(1),16)}));
+    cap.userData.label="カプセル";
+    add(g,cap,rngRange(-0.12,0.12),1.0+rng()*0.15,rngRange(-0.10,0.10));
+  }
+  add(g,box(0.12,0.07,0.10,0x333333,"ガチャレバー"),0.25,0.85,-0.18);
+}
+
+/* ── 水槽 ── */
+function buildAquarium(g){
+  const W=rngRange(0.8,1.4), H=rngRange(0.5,0.8), D=rngRange(0.35,0.55);
+  const legH=0.55;
+  // 台
+  add(g,box(W+0.1,legH,D+0.1,0x554433,"水槽台"),0,legH/2,0);
+  // 水槽本体（青っぽい透明）
+  const tank=new THREE.Mesh(new THREE.BoxGeometry(W,H,D),
+    new THREE.MeshStandardMaterial({color:0x44aaee,transparent:true,opacity:0.35,roughness:0.1,metalness:0.05}));
+  tank.userData.label="水槽";
+  add(g,tank,0,legH+H/2,0);
+  // 砂利
+  add(g,box(W*0.9,0.04,D*0.85,0xaa9955,"砂利"),0,legH+0.025,0);
+  // 岩
+  for(let i=0;i<3;i++) add(g,box(rngRange(0.06,0.14),rngRange(0.05,0.12),rngRange(0.05,0.12),pick([0x888880,0x666660,0x999988]),"岩"),rngRange(-W/3,W/3),legH+0.05,rngRange(-D/3,D/3));
+}
+
+/* ── アーケードゲーム機 ── */
+function buildArcade(g){
+  const bc=fclrHex();
+  add(g,box(0.65,1.70,0.60,bc,"アーケード筐体"),0,0.85,0);
+  // 画面
+  const canvas=document.createElement("canvas");
+  canvas.width=128; canvas.height=128;
+  const ctx=canvas.getContext("2d");
+  ctx.fillStyle="#000022"; ctx.fillRect(0,0,128,128);
+  // ピクセルアート風（シンプルなスペースシップ）
+  ctx.fillStyle="#00ff44";
+  [[4,5],[4,6],[3,7],[4,7],[5,7],[2,8],[3,8],[4,8],[5,8],[6,8]].forEach(([x,y])=>{ ctx.fillRect(x*13,y*13,12,12); });
+  // 弾
+  ctx.fillStyle="#ffffff"; for(let i=0;i<5;i++) ctx.fillRect(rng()*100+14,rng()*50,4,10);
+  // 敵
+  ctx.fillStyle="#ff4444"; for(let i=0;i<6;i++) ctx.fillRect(i*20+4,20,14,12);
+  const scTex=new THREE.CanvasTexture(canvas);
+  const screen=new THREE.Mesh(new THREE.BoxGeometry(0.44,0.36,0.03),new THREE.MeshStandardMaterial({map:scTex,emissive:0x001122,emissiveIntensity:0.4}));
+  screen.userData.label="ゲーム画面";
+  add(g,screen,0,1.20,-0.31);
+  // コントロールパネル
+  add(g,box(0.55,0.02,0.28,0x222222,"パネル"),0,0.90,-0.20);
+  [[-0.10,0.88],[ 0.10,0.88],[ 0.05,0.88]].forEach(([ox,oy])=>add(g,box(0.06,0.06,0.06,fclrHex(),"ボタン"),ox,oy,-0.12));
+  add(g,box(0.04,0.20,0.04,0x111111,"レバー"),0.18,1.00,-0.12);
+}
+
+/* ── 電話ボックス ── */
+function buildPhoneBooth(g){
+  const bc=fclrHex();
+  add(g,box(0.90,2.30,0.90,bc,"電話ボックス"),0,1.15,0);
+  // ガラス面（透明）
+  const glass=new THREE.Mesh(new THREE.BoxGeometry(0.02,2.10,0.75),new THREE.MeshStandardMaterial({color:0x88ccff,transparent:true,opacity:0.3}));
+  glass.userData.label="電話ガラス"; add(g,glass,-0.45,1.15,0);
+  // 受話器
+  add(g,box(0.05,0.15,0.06,0x222222,"受話器"),0.38,1.40,-0.42);
+}
+
+/* ── 植木鉢 ── */
+function buildPlant(g){
+  // 鉢
+  const potCol=pick([0xcc7744,0xaa5533,0x885522,0x998866]);
+  add(g,new THREE.Mesh(new THREE.CylinderGeometry(0.18,0.13,0.25,10),new THREE.MeshStandardMaterial({color:potCol})),0,0.125,0);
+  // 土
+  add(g,box(0.30,0.04,0.30,0x3a2a10,"土"),0,0.26,0);
+  // 茎・葉
+  const leafCol=pick([0x22aa44,0x33bb33,0x55cc22,0x228833]);
+  add(g,cyl(0.025,0.6,leafCol,"茎"),0,0.58,0);
+  for(let i=0;i<6;i++){
+    const a=i/6*Math.PI*2, r=0.08+rng()*0.15, lh=rngRange(0.3,0.9);
+    const leaf=box(rngRange(0.12,0.22),0.03,rngRange(0.08,0.16),leafCol,"葉");
+    leaf.rotation.z=rngRange(-0.5,0.5); leaf.rotation.x=rngRange(-0.3,0.3);
+    add(g,leaf,Math.cos(a)*r,lh,Math.sin(a)*r);
+  }
+}
+
+/* ── 自動販売機（レトロ大型） ── */
+function buildBigVending(g){
+  const bc=fclrHex();
+  add(g,box(1.10,2.00,0.62,bc,"大型自販機"),0,1.0,0);
+  add(g,box(0.80,1.10,0.03,0x88aacc,"自販ガラス"),0,1.25,-0.32);
+  const items=["🥤","🍵","☕","🧃","🍺","🧋"];
+  for(let r=0;r<4;r++) for(let c=0;c<3;c++){
+    const btn=box(0.12,0.10,0.03,fclrHex(),"ボタン");
+    add(g,btn,(c-1)*0.16, 0.50+r*0.15, -0.32);
+  }
+  add(g,box(0.45,0.12,0.04,0x333333,"トレー"),0,0.35,-0.32);
+}
+
+/* ── ロッカー群 ── */
+function buildLockerBank(g){
+  const n=2+Math.floor(rng()*3);
+  const W=0.40, H=rngRange(1.6,2.0), D=0.45;
+  for(let i=0;i<n;i++){
+    const lc=fclrHex();
+    const lx=(i-(n-1)/2)*(W+0.02);
+    add(g,box(W,H,D,lc,"ロッカー"+i),lx,H/2,0);
+    add(g,box(W*0.90,0.02,D*0.90,0x222222,"仕切り"+i),lx,H/2,0);
+    add(g,box(0.04,0.06,0.04,0x888888,"取っ手"+i),lx+W*0.22,H*0.55,-D/2-0.03);
+  }
+}
+
+/* ── 机＋モニター＋キーボード ── */
+function buildComputerDesk(g){
+  buildDesk(g);
+  // モニター
+  add(g,box(0.55,0.35,0.04,0x222222,"モニター"),0,0.95,-0.05);
+  const canvas=document.createElement("canvas");
+  canvas.width=128; canvas.height=96;
+  const ctx=canvas.getContext("2d");
+  ctx.fillStyle="#0a1a2a"; ctx.fillRect(0,0,128,96);
+  ctx.fillStyle="#00ff88"; ctx.font="10px monospace";
+  ["$ ls -la","total 42","drwxr-x..","./game.js",">>> OK"].forEach((l,i)=>ctx.fillText(l,6,18+i*15));
+  const screenTex=new THREE.CanvasTexture(canvas);
+  const screen=new THREE.Mesh(new THREE.BoxGeometry(0.50,0.32,0.02),
+    new THREE.MeshStandardMaterial({map:screenTex,emissive:0x001122,emissiveIntensity:0.5}));
+  screen.userData.label="画面";
+  add(g,screen,0,0.97,-0.06);
+  // キーボード
+  add(g,box(0.45,0.02,0.18,0x333344,"キーボード"),0,0.75,0.10);
+}
+
+/* 家具リスト ── */
+const FURNITURE_LIST=[
+  g=>buildDesk(g),
+  g=>buildChair(g),
+  g=>buildBookshelf(g),
+  g=>buildCabinet(g),
+  g=>buildSofa(g),
+  g=>{buildDesk(g); /* 机の上にランプ */
+    const lamp=new THREE.Group(); buildTableLamp(lamp);
+    lamp.position.set(rngRange(-0.3,0.3),rngRange(0.70,0.78),rngRange(-0.15,0.15));
+    g.add(lamp);},
+  g=>buildOfficeChair(g),
+  g=>buildWhiteboard(g),
+  g=>buildCardboardStack(g),
+  g=>buildVendingMachine(g),
+  g=>buildCopier(g),
+  g=>buildTrashCan(g),
+  g=>buildPaperPile(g),
+  g=>{buildDesk(g);buildOfficeChair(g);}, // 机セット
+  g=>buildSign(g),
+  g=>buildSign(g), // 看板を多めに
+  g=>buildSign(g),
+  g=>buildPainting(g),
+  g=>buildPainting(g), // 絵画を多めに
+  g=>buildPainting(g),
+  g=>buildNeonSign(g),
+  g=>buildNeonSign(g),
+  g=>buildPoster(g),
+  g=>buildPoster(g),
+  g=>buildBlackboard(g),
+  g=>buildGachapon(g),
+  g=>buildAquarium(g),
+  g=>buildArcade(g),
+  g=>buildArcade(g),
+  g=>buildPhoneBooth(g),
+  g=>buildPlant(g),
+  g=>buildPlant(g),
+  g=>buildBigVending(g),
+  g=>buildLockerBank(g),
+  g=>buildComputerDesk(g),
+  g=>buildComputerDesk(g),
+  g=>{buildDesk(g);buildPainting(g);}, // 机＋絵画セット
+  g=>{buildSofa(g);buildTableLamp(g);}, // ソファ＋ランプセット
+  g=>{buildCabinet(g);buildSign(g);},  // キャビネット＋看板
+  g=>buildToppledChair(g),
+  g=>buildPillar(g),
+];
+
+/* ── 各セルに家具を配置 ── */
+for(let cz=0;cz<GRID_N;cz++){
+  for(let cx=0;cx<GRID_N;cx++){
+    const bx=cellCenter(cx), bz=cellCenter(cz);
+
+    // 蛍光灯はほぼ全部屋に（バックルームズの雰囲気）
+    if(rng()<0.97){
+      const n=3+Math.floor(rng()*4);
+      for(let i=0;i<n;i++){
+        placeFurniture(g=>buildFluorescentLight(g),
+          bx+rngRange(-CELL*0.25,CELL*0.25), bz+rngRange(-CELL*0.25,CELL*0.25),
+          rngRange(0,Math.PI));
+      }
+    }
+    // 支柱：25%の確率でランダムな位置に
+    if(rng()<0.25){
+      placeFurniture(g=>buildPillar(g),
+        bx+rngRange(-CELL*0.3,CELL*0.3), bz+rngRange(-CELL*0.3,CELL*0.3),0);
+    }
+
+    // 部屋の家具密度をランダムに（家具が多すぎたためさらに1/3程度に削減）
+    const density=rng();
+    const countRaw = density<0.03 ? 6      // 最小部屋
+                : density<0.15 ? 14
+                : density<0.50 ? 22
+                : density<0.80 ? 30
+                :                38+Math.floor(rng()*12); // 超カオス部屋
+    const count = Math.max(1, Math.round(countRaw / 3.5));
+
+    for(let i=0;i<count;i++){
+      const fx=bx+rngRange(-CELL*0.46,CELL*0.46);
+      const fz=bz+rngRange(-CELL*0.46,CELL*0.46);
+      // カオス度：15%の確率で家具を斜め・倒れた状態に
+      const baseRotY=rngRange(0,Math.PI*2);
+      const builder=pick(FURNITURE_LIST);
+      if(rng()<0.15){
+        // 倒れた家具
+        placeFurniture(g=>{
+          builder(g);
+          g.rotation.z=rngRange(0.6,Math.PI/2+0.3)*pick([-1,1]);
+          g.rotation.x=rngRange(-0.3,0.3);
+          g.position.y=rngRange(0.2,0.6);
+        }, fx,fz,baseRotY);
+      } else {
+        placeFurniture(builder, fx,fz,baseRotY);
+      }
+    }
+  }
+}
+
+/* ── スタート地点（原点付近）は少しだけ開けておく ── */
+{
+  const toRemove=[];
+  colliderMeshes.forEach(m=>{
+    if((m.userData.bgName||"").startsWith("壁")) return;
+    if(Math.hypot(m.position.x,m.position.z)<0.8) toRemove.push(m);
+  });
+  toRemove.forEach(m=>{
+    scene.remove(m);
+    let idx=colliderMeshes.indexOf(m); if(idx>=0) colliderMeshes.splice(idx,1);
+    idx=backgroundObjects.indexOf(m); if(idx>=0) backgroundObjects.splice(idx,1);
+  });
+}
+// ヒントを更新（壁すり抜け可能の旨）
+
+// 見えない外周の当たり判定は、実際に見える境界壁(MAP_HALF)より内側に置くと
+// 「壁に到達する前に見えない力場で止められる」謎の余白の原因になる。
+// 境界壁自体がすでに(ドアなしの)当たり判定を持っているので、この見えない壁は
+// 万一のすり抜け防止のための保険として、実際の壁よりわずかに外側に配置する。
+layoutBounds(MAP_HALF+0.5, 30);
+scene.fog.near = MAP_HALF*0.4;
+scene.fog.far  = MAP_HALF*1.5;
+
+/* ── 天井 ── */
+{
+  const ceilCanvas = document.createElement("canvas");
+  ceilCanvas.width = 512; ceilCanvas.height = 512;
+  const ceilCtx = ceilCanvas.getContext("2d");
+  ceilCtx.fillStyle="#c8ba58"; ceilCtx.fillRect(0,0,512,512);
+  // タイル模様
+  for(let i=0;i<8;i++) for(let j=0;j<8;j++){
+    const shade=((i+j)%2===0)?0.95:0.85;
+    ceilCtx.fillStyle=`rgba(0,0,0,${1-shade})`;
+    ceilCtx.fillRect(i*64,j*64,64,64);
+  }
+  const ceilTex = new THREE.CanvasTexture(ceilCanvas);
+  ceilTex.repeat.set(GRID_N*2, GRID_N*2);
+  ceilTex.wrapS = ceilTex.wrapT = THREE.RepeatWrapping;
+  const ceilMat = new THREE.MeshStandardMaterial({ map:ceilTex, side:THREE.DoubleSide, roughness:0.9 });
+  const ceiling = new THREE.Mesh(new THREE.PlaneGeometry(MAP_HALF*2.4, MAP_HALF*2.4), ceilMat);
+  ceiling.rotation.x = Math.PI/2;
+  ceiling.position.y = WALL_H + 0.02;
+  ceiling.receiveShadow = true;
+  ceiling.userData.isBackground = true;
+  ceiling.userData.bgName = "天井";
+  scene.add(ceiling);
+  backgroundObjects.push(ceiling);
+}
+
+rebuildColliders();
+
+/* =========================================================
+   キャラクター構築（白い人型・パーツをグループ化）
+   ========================================================= */
+const character = new THREE.Group();
+character.position.set(0, 0, 0);
+scene.add(character);
+
+// キャラクターが街のスケールに対して大きすぎたため、見た目の身長を縮小する。
+// （当たり判定の半径・足元の高さ判定は、この値を使って自動的に追従させる）
+const CHAR_SCALE = 0.187; // 元の1/3のサイズ
+character.scale.setScalar(CHAR_SCALE);
+
+// キャラクターの見た目のサイズだけをCHAR_SCALEで縮小しても、カメラ側の
+// 目線の高さ・距離をそのままにしてしまうと「身長は小さいのにカメラだけ
+// 遠く高い位置にある」という不自然な状態になる。
+// そこで、キャラクターの頭の高さ（縮小前の座標で約2.8）にCHAR_SCALEを
+// 掛けた値を「実際の目線の高さ」として使い、カメラの追従先もその高さに合わせる。
+const CAMERA_EYE_HEIGHT = 2.8 * CHAR_SCALE; // 縮小後の実身長に合った目線の高さ
+
+// BoxGeometryは標準だと6面すべてが同じUV(0〜1)範囲を共有しているため、
+// 1枚のキャンバスをそのままテクスチャに使うと「どの面を塗っても全部の面に
+// 同じ絵が写ってしまう」問題が起きる。これを避けるため、キャンバスを
+// 3x2のマス目（アトラス）に分割し、面ごとに専用の領域だけを使うようにする。
+const PAINT_CANVAS_SIZE = 256; // 面1枚あたりのテクスチャ解像度（従来と同じ見た目の細かさを維持）
+const ATLAS_COLS = 3;
+const ATLAS_ROWS = 2;
+const paintableParts = []; // {mesh, canvas, ctx, texture, worldSize}
+
+// BoxGeometryの各面（+x,-x,+y,-y,+z,-z の順）のUVを、
+// アトラス内の専用マスにマッピングし直す
+function remapBoxUVsToAtlas(geo, cols, rows){
+  const uv = geo.attributes.uv;
+  if (!uv) return;
+  const facesCount = 6;
+  const vertsPerFace = uv.count / facesCount;
+  for (let f = 0; f < facesCount; f++) {
+    const col = f % cols;
+    const row = Math.floor(f / cols);
+    for (let v = 0; v < vertsPerFace; v++) {
+      const idx = f * vertsPerFace + v;
+      const u = uv.getX(idx);
+      const vv = uv.getY(idx);
+      uv.setXY(idx, (col + u) / cols, (row + vv) / rows);
+    }
+  }
+  uv.needsUpdate = true;
+}
+
+function createPaintCanvas(baseColor){
+  const canvas = document.createElement("canvas");
+  canvas.width = PAINT_CANVAS_SIZE * ATLAS_COLS;
+  canvas.height = PAINT_CANVAS_SIZE * ATLAS_ROWS;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  ctx.fillStyle = baseColor;
+  ctx.fillRect(0,0,canvas.width, canvas.height);
+  const texture = new THREE.CanvasTexture(canvas);
+  // アトラスの境界で隣の面の色がにじんで見えないようにする
+  texture.generateMipmaps = false;
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  texture.needsUpdate = true;
+  return { canvas, ctx, texture };
+}
+
+function makePaintablePart(geo, worldSize, baseColor="#ffffff"){
+  remapBoxUVsToAtlas(geo, ATLAS_COLS, ATLAS_ROWS);
+  const { canvas, ctx, texture } = createPaintCanvas(baseColor);
+  const mat = new THREE.MeshStandardMaterial({ map: texture, roughness: 0.7 });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  mesh.userData.isCharacterPart = true;
+  paintableParts.push({ mesh, canvas, ctx, texture, worldSize });
+  return mesh;
+}
+
+// マイクラ風ブロック体型（すべて直方体パーツ。丸み・関節球は使わない）
+const torso = makePaintablePart(new THREE.BoxGeometry(0.8, 1.2, 0.4), 1.2, "#ffffff");
+torso.position.y = 1.8;
+character.add(torso);
+
+const headGroup = new THREE.Group();
+headGroup.position.set(0, 2.8, 0);
+character.add(headGroup);
+const head = makePaintablePart(new THREE.BoxGeometry(0.8, 0.8, 0.8), 0.8, "#ffffff");
+headGroup.add(head);
+
+function makeArm(side){
+  const pivot = new THREE.Group();
+  pivot.position.set(side * 0.6, 2.4, 0); // 肩位置（胴体の上端）
+  const arm = makePaintablePart(new THREE.BoxGeometry(0.4, 1.2, 0.4), 1.2, "#ffffff");
+  arm.position.y = -0.6; // ピボット(肩)から下方向にぶら下げる
+  pivot.add(arm);
+  character.add(pivot);
+  return pivot;
+}
+const leftArmPivot  = makeArm(-1);
+const rightArmPivot = makeArm( 1);
+
+function makeLeg(side){
+  const pivot = new THREE.Group();
+  pivot.position.set(side * 0.2, 1.2, 0); // 股関節位置（胴体の下端）
+  const leg = makePaintablePart(new THREE.BoxGeometry(0.4, 1.2, 0.4), 1.2, "#ffffff");
+  leg.position.y = -0.6;
+  pivot.add(leg);
+  character.add(pivot);
+  return pivot;
+}
+const leftLegPivot  = makeLeg(-1);
+const rightLegPivot = makeLeg( 1);
+
+
+
+/* =========================================================
+   TPS追従カメラコントローラ
+   ========================================================= */
+const camRig = {
+  yaw: 0,            // キャラクターを中心とした水平角
+  pitch: 0.32,        // 仰角
+  // 以下の距離もキャラクターの実サイズ(CHAR_SCALE適用後)に合わせて縮小。
+  // そのままの数値だと、小さくなったキャラクターに対してカメラだけが
+  // 遠く・高くなってしまう。
+  distance: 6.2 * CHAR_SCALE,
+  minDistance: 2.5 * CHAR_SCALE,
+  maxDistance: 12 * CHAR_SCALE,
+  minPitch: -1.45,
+  maxPitch: 1.45,
+  sensitivity: 0.0024
+};
+
+// マウスでの視点操作改善ポイント：
+// 右ドラッグ中はPointer Lockを使うことで、カーソルが画面外に出ても
+// movementX/Y が安定して取得でき、「途中で視点が止まる/飛ぶ」問題を解消する。
+let isOrbiting = false; // 右ドラッグ中
+window.addEventListener("contextmenu", (e)=> e.preventDefault());
+
+renderer.domElement.addEventListener("pointerdown", (e)=>{
+  if (e.button === 2) {
+    isOrbiting = true;
+    if (renderer.domElement.requestPointerLock) {
+      renderer.domElement.requestPointerLock();
+    }
+  }
+});
+window.addEventListener("pointerup", (e)=>{
+  if (e.button === 2) {
+    isOrbiting = false;
+    if (document.pointerLockElement === renderer.domElement && document.exitPointerLock) {
+      document.exitPointerLock();
+    }
+  }
+});
+document.addEventListener("pointerlockchange", ()=>{
+  if (document.pointerLockElement !== renderer.domElement) isOrbiting = false;
+});
+window.addEventListener("pointermove", (e)=>{
+  if (isOrbiting) {
+    camRig.yaw   -= e.movementX * camRig.sensitivity;
+    camRig.pitch -= e.movementY * camRig.sensitivity;
+    camRig.pitch = Math.max(camRig.minPitch, Math.min(camRig.maxPitch, camRig.pitch));
+  }
+});
+renderer.domElement.addEventListener("wheel", (e)=>{
+  camRig.distance += e.deltaY * 0.0035;
+  camRig.distance = Math.max(camRig.minDistance, Math.min(camRig.maxDistance, camRig.distance));
+}, { passive:true });
+
+// 初期カメラ位置を即時反映
+function updateTPSCamera(dt, snap){
+  const targetHeight = CAMERA_EYE_HEIGHT; // 縮小後の実際の身長に合わせた目線の高さ
+  const focus = new THREE.Vector3(character.position.x, character.position.y + targetHeight, character.position.z);
+
+  const offsetX = Math.sin(camRig.yaw) * Math.cos(camRig.pitch) * camRig.distance;
+  const offsetZ = Math.cos(camRig.yaw) * Math.cos(camRig.pitch) * camRig.distance;
+  const offsetY = Math.sin(camRig.pitch) * camRig.distance + 0.4 * CHAR_SCALE;
+
+  const desired = new THREE.Vector3(focus.x + offsetX, focus.y + offsetY, focus.z + offsetZ);
+
+  if (snap) {
+    camera.position.copy(desired);
+  } else {
+    camera.position.lerp(desired, Math.min(1, dt * 8));
+  }
+  camera.lookAt(focus.x, focus.y + 0.15 * CHAR_SCALE, focus.z);
+}
+updateTPSCamera(0, true);
+
+/* =========================================================
+   移動の当たり判定
+   （読み込み時に作っておいた「細かいAABBセルの集合」に対して
+    　円 vs AABB の軽い判定だけを行う。以前は毎フレーム多方向に
+    　レイキャストしていたため動作が重くなっていたが、判定対象の
+    　箱自体を細かく分解しておくことで、レイキャスト無しでも
+    　精密かつ軽量な当たり判定にできる）
+   ========================================================= */
+const PLAYER_RADIUS_BASE = Math.max(0.30 * CHAR_SCALE, 0.08); // CHAR_SCALE適用後の体格(胴体幅相当+少し余裕)に合わせた当たり判定半径
+                                          // ※以前はCHAR_SCALEが掛かっておらず、縮小後の体に対して
+                                          //   半径が大きすぎるままだったため、壁や家具に近づくと
+                                          //   見た目より遥かに手前で止まってしまう「謎の隙間」が発生していた。
+                                          //   下限0.08は、移動速度に対して半径が小さすぎて薄い壁を
+                                          //   すり抜けてしまう(トンネリング)のを防ぐための最低保証値。
+const CHAR_HEIGHT_BASE = 3.2 * CHAR_SCALE;      // 頭までのおおよその高さ
+let PLAYER_RADIUS = PLAYER_RADIUS_BASE;
+let CHAR_HEIGHT = CHAR_HEIGHT_BASE;
+const STEP_HEIGHT = 0.4;                    // これより低い段差(縁石など)は乗り越えられるようにする
+// 天井の高さ(WALL_H + 天井メッシュのオフセット0.02)から頭の高さ分を引いた、
+// 足元(character.position.y)が超えてはいけない上限。天井メッシュ自体は当たり判定
+// 用のコライダーには登録していない(横方向のAABB判定だと天井のような床全面を覆う
+// 板は正しく扱えないため)。その代わりここで直接Y座標の上限としてクランプすることで、
+// Spaceキーでの上昇時などに天井をすり抜けられないようにする。
+let CEILING_LIMIT_Y = (WALL_H + 0.02) - CHAR_HEIGHT - 0.05;
+// オンライン対戦：鬼(オニ)はプレイヤーの2倍の身長・当たり判定になる。
+// この関数で見た目のスケールと当たり判定(半径・高さ・天井制限)を同時に切り替える。
+function setSizeMultiplier(mul){
+  PLAYER_RADIUS = PLAYER_RADIUS_BASE * mul;
+  CHAR_HEIGHT = CHAR_HEIGHT_BASE * mul;
+  CEILING_LIMIT_Y = (WALL_H + 0.02) - CHAR_HEIGHT - 0.05;
+  character.scale.setScalar(CHAR_SCALE * mul);
+}
+
+function resolveCollisions(pos){
+  // 1回の押し出しだけだと、角や複数の壁に同時に接触している時に
+  // わずかな食い込みが残ってカクついたり「何かに引っかかる」感触の原因になるため、
+  // 数回繰り返して押し出しを安定させる。
+  for (let pass = 0; pass < 4; pass++) {
+    let any = false;
+    for (let i=0; i<colliders.length; i++){
+      const c = colliders[i];
+      if (wallMode && c.mesh === wallTarget) continue; // 今張り付いている壁自体は除外
+      const box = c.box;
+      // 頭上はるか上にしかない物（高い棚の上など）は無視して素通りできるようにする
+      if (pos.y + CHAR_HEIGHT < box.min.y) continue;
+      // 低い段差(縁石など)は足元がその上面より十分高ければ衝突として扱わず、乗り越えさせる。
+      // ただし「壁」自体はすり抜け防止のため、高さに関わらず常に衝突させる
+      // （落下復帰中などで足元の高さが一時的にズレても壁を突き抜けないようにするため）。
+      if (!c.mesh.userData.isWall && pos.y > box.max.y + STEP_HEIGHT) continue;
+
+      const closestX = Math.max(box.min.x, Math.min(pos.x, box.max.x));
+      const closestZ = Math.max(box.min.z, Math.min(pos.z, box.max.z));
+      const dx = pos.x - closestX;
+      const dz = pos.z - closestZ;
+      const distSq = dx*dx + dz*dz;
+      if (distSq < PLAYER_RADIUS*PLAYER_RADIUS) {
+        const dist = Math.sqrt(distSq) || 0.0001;
+        const push = (PLAYER_RADIUS - dist) + 0.001;
+        pos.x += (dx/dist) * push;
+        pos.z += (dz/dist) * push;
+        any = true;
+      }
+    }
+    if (!any) break;
+  }
+}
+
+/* =========================================================
+   床への自動接地（建物や床へのめり込み防止）
+   ========================================================= */
+const groundRaycaster = new THREE.Raycaster();
+const SNAP_RAY_ABOVE = 6;    // キャラクターが床下にどれだけ深く沈んでいても拾えるよう、十分高い位置から
+const SNAP_RAY_FAR = 60;     // 下方向にも十分長く飛ばす（床がさらに下にある場合にも対応）
+const SNAP_INSTANT_THRESHOLD = 1.2; // これ以上ズレている場合は「めり込み」とみなし、滑らかな補間ではなく即座に補正する
+
+// 真下へのレイキャストは複数の面にヒットしうるが、その中から「現在の足元より
+// STEP_HEIGHTを超えて高い面」は候補から除外する。これにより、家具の天板の縁など
+// (横方向の当たり判定の網目をすり抜けて真上にレイが通ってしまうケース)に接近しただけで
+// 勝手に登ってしまう現象を防ぐ。除外した場合はその下にある本来の床面（隙間から
+// 見える実際の地面など）を採用する。
+function pickGroundHit(hits, currentY){
+  for (let i=0; i<hits.length; i++){
+    if (hits[i].point.y <= currentY + STEP_HEIGHT + 0.001) return hits[i];
+  }
+  return null;
+}
+
+function snapToGround(dt){
+  // 「上昇中(=張り付ける対象の近くでSpaceを押している間)」「壁面密着中」「落下復帰中」の
+  // 時だけ専用処理に任せる。以前はSpaceキーを押しただけ(近くに壁が無くても)で
+  // 接地判定そのものが止まってしまい、支えも落下もせずその場に固まる不具合があった。
+  if (wallMode || isFalling || isFloating) return;
+  const origin = new THREE.Vector3(character.position.x, character.position.y + SNAP_RAY_ABOVE, character.position.z);
+  groundRaycaster.set(origin, new THREE.Vector3(0, -1, 0));
+  groundRaycaster.far = SNAP_RAY_FAR;
+  // 建物・壁(isWall)は接地判定から除外する（近づくと屋上に乗ってしまう不具合の原因だったため）。
+  // ただし地面用メッシュも壁以外の障害物も一切見つからない場合は、最終手段として
+  // 壁メッシュも含めた全コライダーを対象にする（完全にめり込んで二度と復帰できなくなるのを防ぐ）。
+  let targets = groundMeshes.length ? groundMeshes.concat(colliderMeshes.filter(m=>!m.userData.isWall)) : colliderMeshes.filter(m=>!m.userData.isWall);
+  let hits = groundRaycaster.intersectObjects(targets, false);
+  if (hits.length === 0 && colliderMeshes.length > 0) {
+    hits = groundRaycaster.intersectObjects(colliderMeshes, false);
+  }
+  const groundHit = pickGroundHit(hits, character.position.y);
+  if (groundHit) {
+    const groundY = groundHit.point.y;
+    const diff = groundY - character.position.y;
+    if (Math.abs(diff) > SNAP_INSTANT_THRESHOLD) {
+      // 大きくズレている（＝めり込んでいる）場合はワープ的に即補正してめり込み状態を解消する
+      character.position.y = groundY;
+    } else {
+      character.position.y += diff * Math.min(1, dt * 12);
+    }
+  }
+  // 許容範囲内の床面が見つからない場合（近くにあるのは高い面だけ）は、
+  // 今の高さのまま維持し、勝手に登らせない。
+}
+
+
+const ATTACH_RANGE = 1.3;
+const WALL_MARGIN = 0.3;
+
+let wallMode = false;
+let wallTarget = null;
+let wallTargetBox = null;
+let wallNormal = new THREE.Vector3(0,0,1);
+let isFalling = false;
+let isFloating = false; // Spaceキーで上昇し、対象の近くにいる間はその高さで浮いたままの状態
+
+const stickRaycaster = new THREE.Raycaster();
+const STICK_SURFACE_TOLERANCE = 0.9; // レイキャストでの実表面までの許容距離
+
+function findStickTarget(){
+  const p = character.position;
+  const rayOrigin = new THREE.Vector3(p.x, p.y + 1.0, p.z); // 胸の高さあたりから判定
+
+  // 1) まずAABBとの距離が近い候補を集める（粗い絞り込み）
+  const candidates = [];
+  for (let i=0; i<colliders.length; i++){
+    const c = colliders[i];
+    if (!c.mesh.userData.isStickable) continue;
+    const box = c.box;
+    const cx = Math.max(box.min.x, Math.min(p.x, box.max.x));
+    const cz = Math.max(box.min.z, Math.min(p.z, box.max.z));
+    const dx = p.x - cx, dz = p.z - cz;
+    const dist = Math.sqrt(dx*dx + dz*dz);
+    if (dist < ATTACH_RANGE) candidates.push({ c, dist });
+  }
+  if (candidates.length === 0) return null;
+  candidates.sort((a,b)=> a.dist - b.dist);
+
+  // 2) 各候補について、実際のメッシュ表面が近くにあるかをレイキャストで検証する。
+  //    複雑な街並みモデルは1メッシュのバウンディングボックスが中庭などの空洞を
+  //    含むことが多く、AABB距離だけだと「何もない空間」でも張り付き判定に
+  //    なってしまうため、この検証で誤判定を防ぐ。
+  //    また、ここで得られる実際の命中点・法線をそのまま張り付き位置の決定に使うことで、
+  //    「ボックスの遠い面に合わせて一番外側まで飛ばされる」ような誤判定を防ぐ。
+  for (const { c } of candidates){
+    const normalGuess = computeFaceNormal(c.box, p);
+    const dir = normalGuess.clone().negate(); // プレイヤーから壁面に向かう方向
+    stickRaycaster.set(rayOrigin, dir);
+    stickRaycaster.far = ATTACH_RANGE + STICK_SURFACE_TOLERANCE;
+    const hits = stickRaycaster.intersectObject(c.mesh, true);
+    if (hits.length > 0 && hits[0].distance <= ATTACH_RANGE + STICK_SURFACE_TOLERANCE) {
+      const hit = hits[0];
+      const worldNormal = hit.face.normal.clone().transformDirection(hit.object.matrixWorld).normalize();
+      return { c, point: hit.point.clone(), normal: worldNormal };
+    }
+  }
+  return null; // 候補はあったが、実体のある表面が近くに見つからなかった
+}
+
+function computeFaceNormal(box, p){
+  const dLeft  = Math.abs(p.x - box.min.x);
+  const dRight = Math.abs(p.x - box.max.x);
+  const dFront = Math.abs(p.z - box.min.z);
+  const dBack  = Math.abs(p.z - box.max.z);
+  const m = Math.min(dLeft, dRight, dFront, dBack);
+  if (m === dLeft)  return new THREE.Vector3(-1,0,0);
+  if (m === dRight) return new THREE.Vector3(1,0,0);
+  if (m === dFront) return new THREE.Vector3(0,0,-1);
+  return new THREE.Vector3(0,0,1);
+}
+
+function clampToWallFace(pos, box, normal){
+  const out = pos.clone();
+  out.x = THREE.MathUtils.clamp(out.x, box.min.x+WALL_MARGIN, Math.max(box.min.x+WALL_MARGIN, box.max.x-WALL_MARGIN));
+  out.z = THREE.MathUtils.clamp(out.z, box.min.z+WALL_MARGIN, Math.max(box.min.z+WALL_MARGIN, box.max.z-WALL_MARGIN));
+  out.y = THREE.MathUtils.clamp(out.y, box.min.y+WALL_MARGIN, Math.max(box.min.y+WALL_MARGIN, box.max.y-WALL_MARGIN));
+  if (normal.x !== 0) out.x = normal.x > 0 ? box.max.x : box.min.x;
+  if (normal.z !== 0) out.z = normal.z > 0 ? box.max.z : box.min.z;
+  return out;
+}
+
+function snapNormalToAxis(normal){
+  // よじ登り移動(clampToWallFace)はX軸 or Z軸に直交した壁を前提にしているため、
+  // 実際のレイ法線を最も近い水平軸方向へスナップする
+  if (Math.abs(normal.x) >= Math.abs(normal.z)) {
+    return new THREE.Vector3(normal.x >= 0 ? 1 : -1, 0, 0);
+  }
+  return new THREE.Vector3(0, 0, normal.z >= 0 ? 1 : -1);
+}
+
+// 張り付いた地点の「近傍セルだけ」からよじ登り範囲の箱を作る。
+// 以前はメッシュ全体のバウンディングボックス（meshFullBoxMap）を使っていたが、
+// Littlest Tokyoのような複数の建物がひとつの巨大メッシュに結合されたモデルでは
+// その全体ボックスが街全体規模になることがあり、よじ登り移動のクランプが
+// 「張り付いた壁と無関係な遠い座標」まで許してしまい、結果としてプレイヤーが
+// マップ外まで飛んでしまう原因になっていた。近傍セルのみを集計することで、
+// 実際に張り付いている壁面の近くだけをよじ登れる範囲にする。
+const WALL_CLIMB_RANGE = 3.2; // 張り付き地点を中心によじ登れる左右・上下の目安範囲（メートル）
+function buildLocalWallBox(mesh, point){
+  const box = new THREE.Box3();
+  let found = false;
+  for (let i=0; i<colliders.length; i++){
+    const c = colliders[i];
+    if (c.mesh !== mesh) continue;
+    const cx = THREE.MathUtils.clamp(point.x, c.box.min.x, c.box.max.x);
+    const cz = THREE.MathUtils.clamp(point.z, c.box.min.z, c.box.max.z);
+    const cy = THREE.MathUtils.clamp(point.y, c.box.min.y, c.box.max.y);
+    const dx = point.x - cx, dz = point.z - cz, dy = point.y - cy;
+    if (Math.sqrt(dx*dx + dy*dy + dz*dz) > WALL_CLIMB_RANGE) continue;
+    if (!found) { box.copy(c.box); found = true; }
+    else box.union(c.box);
+  }
+  if (!found) {
+    // 近傍セルが見つからない場合（稀）は、張り付き地点を中心にした小さな箱に留める
+    const half = WALL_MARGIN + 0.3;
+    box.setFromCenterAndSize(point.clone(), new THREE.Vector3(half*2, 2.4, half*2));
+  } else {
+    // 範囲を少しだけ外側にゆとり（マージン分）を持たせる
+    box.expandByScalar(WALL_MARGIN);
+  }
+  return box;
+}
+
+function attachToWall(target){
+  wallTarget = target.c.mesh;
+  // よじ登り範囲のクランプには、張り付き地点近傍だけのローカルな箱を使う
+  // （メッシュ全体の箱だと巨大結合メッシュの場合に範囲が広すぎてマップ外まで飛んでしまうため）
+  wallTargetBox = buildLocalWallBox(wallTarget, target.point);
+  wallNormal = snapNormalToAxis(target.normal);
+  // 「実際にレイが当たった場所」をそのまま張り付き位置にすることで、
+  // ボックスの遠い面に合わせて一番外側まで飛ばされてしまう問題を解消する
+  character.position.copy(target.point).addScaledVector(wallNormal, 0.05);
+  wallMode = true;
+  isFalling = false;
+  isFloating = false;
+  // ポーズは変更しない（張り付いた瞬間に今選んでいるポーズのまま維持する）
+  character.rotation.y = Math.atan2(wallNormal.x, wallNormal.z);
+}
+
+// 障害物に近づいている間はクールダウンだけ管理する（張り付き自体はEキー入力で行う）
+let detachCooldown = 0;
+function stickCooldownUpdate(dt){
+  if (detachCooldown > 0) detachCooldown -= dt;
+}
+
+function tryToggleWallStick(){
+  if (wallMode) { detachFromWall(); return; }
+  if (detachCooldown > 0) return;
+  const target = findStickTarget();
+  if (!target) return;
+  attachToWall(target);
+}
+
+function detachFromWall(){
+  if (!wallMode) return;
+  wallMode = false;
+  character.position.addScaledVector(wallNormal, 0.55);
+  isFalling = true;
+  wallTarget = null;
+  wallTargetBox = null;
+  detachCooldown = 0.5; // 離れた直後に即再付着しないように猶予を持たせる
+}
+
+/* =========================================================
+   ポーズ・ステートマシン（直立 / しゃがみ / べったり擬態）
+   ========================================================= */
+const keys = { w:false, a:false, s:false, d:false, space:false, shift:false };
+window.addEventListener("keydown", (e)=>{
+  const k = e.key.toLowerCase();
+  if (k in keys) keys[k] = true;
+  if (k === " ") {
+    e.preventDefault(); // スペースキーでのページスクロールを防ぐ
+    keys.space = true;
+    if (!wallMode) isFalling = false; // 上昇/浮遊中は落下処理を中断
+  } else if (k === "control") {
+    // Ctrlキーで浮遊・張り付きを解除し、その場の地面まで降下する
+    if (wallMode) detachFromWall();
+    keys.space = false;
+    isFloating = false;
+    isFalling = true;
+  }
+});
+window.addEventListener("keyup", (e)=>{
+  const k = e.key.toLowerCase();
+  if (k in keys) keys[k] = false;
+  if (k === " ") {
+    keys.space = false;
+    // Spaceを離しても落下させない（isFloatingがtrueのままなのでその高さで浮遊し続ける。
+    // 解除はCtrlキーのみで行う）
+  }
+});
+
+const POSES = {
+  stand:   { torsoScaleY:1.00, armSpread:0.00,   legSpread:0.00, hipBend:0.00,  tiltOnGround:0.00,  heightDrop:0.00,  speedMul:1.00, label:"直立" },
+  crouch:  { torsoScaleY:0.82, armSpread:0.12,   legSpread:0.12, hipBend:0.95,  tiltOnGround:0.00,  heightDrop:0.45,  speedMul:0.55, label:"しゃがみ" },
+  flatten: { torsoScaleY:1.00, armSpread:1.5708, legSpread:0.00, hipBend:0.00,  tiltOnGround:-1.45, heightDrop:1.05,  speedMul:0.30, label:"べったり擬態（Tポーズ）" },
+  sit:     { torsoScaleY:0.75, armSpread:0.08,   legSpread:0.05, hipBend:1.35,  tiltOnGround:0.00,  heightDrop:0.75,  speedMul:0.05, label:"体育座り" },
+  alert:   { torsoScaleY:1.06, armSpread:0.00,   legSpread:0.00, hipBend:-0.15, tiltOnGround:0.00,  heightDrop:-0.25, speedMul:0.85, label:"警戒立ち（つま先立ち）" },
+  stretch: { torsoScaleY:1.18, armSpread:1.20,   legSpread:0.00, hipBend:-0.30, tiltOnGround:-0.20, heightDrop:-0.15, speedMul:0.40, label:"伸び" },
+  curl:    { torsoScaleY:0.55, armSpread:0.65,   legSpread:0.30, hipBend:1.55,  tiltOnGround:0.00,  heightDrop:0.90,  speedMul:0.15, label:"丸まる（防御姿勢）" },
+  crawl:   { torsoScaleY:0.90, armSpread:0.90,   legSpread:0.50, hipBend:0.50,  tiltOnGround:-0.90, heightDrop:0.85,  speedMul:0.50, label:"匍匐前進" }
+};
+let currentPose = "stand";
+const poseAnim = { torsoScaleY:1, armSpread:0, legSpread:0, hipBend:0, tilt:0, heightDrop:0 };
+
+window.addEventListener("keydown", (e)=>{
+  if (e.repeat) return;
+  const k = e.key.toLowerCase();
+  if (k === "e") {
+    tryToggleWallStick();
+  } else if (k === "1") {
+    // 張り付き中でも解除せず、ポーズだけ切り替える
+    currentPose = "stand";
+  } else if (k === "2") {
+    currentPose = "crouch";
+  } else if (k === "3") {
+    currentPose = "flatten";
+  } else if (k === "4") {
+    currentPose = "sit";
+  } else if (k === "5") {
+    currentPose = "alert";
+  } else if (k === "6") {
+    currentPose = "stretch";
+  } else if (k === "7") {
+    currentPose = "curl";
+  } else if (k === "8") {
+    currentPose = "crawl";
+  }
+});
+
+document.querySelectorAll(".pose-btn").forEach(btn=>{
+  btn.addEventListener("click", ()=>{
+    // 張り付き中でも解除せず、ポーズだけ切り替える
+    currentPose = btn.dataset.pose;
+  });
+});
+
+function updatePoseButtonsUI(){
+  document.querySelectorAll(".pose-btn").forEach(btn=>{
+    btn.classList.toggle("active", btn.dataset.pose === currentPose);
+  });
+}
+
+function updatePoseBlend(dt){
+  const target = POSES[currentPose];
+  const rate = Math.min(1, dt * 7);
+  poseAnim.torsoScaleY += (target.torsoScaleY - poseAnim.torsoScaleY) * rate;
+  poseAnim.armSpread   += (target.armSpread   - poseAnim.armSpread)   * rate;
+  poseAnim.legSpread   += (target.legSpread   - poseAnim.legSpread)   * rate;
+  poseAnim.hipBend      += (target.hipBend      - poseAnim.hipBend)     * rate;
+  poseAnim.heightDrop    += (target.heightDrop    - poseAnim.heightDrop)  * rate;
+  const tiltTarget = wallMode ? 0 : target.tiltOnGround;
+  poseAnim.tilt += (tiltTarget - poseAnim.tilt) * rate;
+}
+
+const animState = { current: "idle", blend: 0, walkPhase: 0, moveSpeed: 1.7 }; // 通常歩行速度（以前は3.4で速すぎた）
+const DASH_MULTIPLIER = 2.0; // Shift長押しでダッシュする際の速度倍率
+const stateTag = document.getElementById("state-tag");
+const wallHintEl = document.getElementById("wall-hint");
+
+function isMoving(){ return keys.w || keys.a || keys.s || keys.d; }
+
+function updateAnimation(dt){
+  stickCooldownUpdate(dt);
+  snapToGround(dt);
+  updatePoseBlend(dt);
+  updatePoseButtonsUI();
+
+  const moving = isMoving();
+  animState.current = moving ? "walk" : "idle";
+
+  const target = moving ? 1 : 0;
+  animState.blend += (target - animState.blend) * Math.min(1, dt * 6.0);
+
+  if (moving) animState.walkPhase += dt * 9.0 * (keys.shift ? DASH_MULTIPLIER : 1);
+  else animState.walkPhase *= 0.9;
+
+  const swing = Math.sin(animState.walkPhase) * 0.9;
+  const swingOpp = Math.sin(animState.walkPhase + Math.PI) * 0.9;
+
+  const idleBob = Math.sin(performance.now()*0.002) * 0.04;
+  const idleArmAngle = Math.sin(performance.now()*0.0015) * 0.05;
+
+  const walkArmAngleL = swing * 0.8;
+  const walkArmAngleR = swingOpp * 0.8;
+  const walkLegAngleL = swingOpp * 0.6;
+  const walkLegAngleR = swing * 0.6;
+
+  const b = animState.blend;
+
+  // ポーズによる胴体スケール（潰れて広がる＝volume保存っぽい補正つき）
+  const sY = poseAnim.torsoScaleY;
+  const sXZ = 1 + (1 - sY) * 0.3;
+  torso.scale.set(1.0 * sXZ, 1.35 * sY, 0.78 * sXZ);
+
+  torso.position.y = (1.8 - poseAnim.heightDrop) + THREE.MathUtils.lerp(idleBob, Math.abs(swing)*0.06, b);
+  headGroup.position.y = (2.8 - poseAnim.heightDrop*1.15) + THREE.MathUtils.lerp(idleBob*0.6, Math.abs(swing)*0.03, b);
+
+  leftArmPivot.rotation.x  = THREE.MathUtils.lerp(idleArmAngle, walkArmAngleL, b) + poseAnim.hipBend*0.4;
+  rightArmPivot.rotation.x = THREE.MathUtils.lerp(-idleArmAngle, walkArmAngleR, b) + poseAnim.hipBend*0.4;
+  leftArmPivot.rotation.z  =  poseAnim.armSpread;
+  rightArmPivot.rotation.z = -poseAnim.armSpread;
+
+  leftLegPivot.rotation.x  = THREE.MathUtils.lerp(0, walkLegAngleL, b) + poseAnim.hipBend;
+  rightLegPivot.rotation.x = THREE.MathUtils.lerp(0, walkLegAngleR, b) + poseAnim.hipBend;
+  leftLegPivot.rotation.z  =  poseAnim.legSpread;
+  rightLegPivot.rotation.z = -poseAnim.legSpread;
+
+  character.rotation.x = poseAnim.tilt; // 地面でのべったり擬態時のみ傾く
+
+  // 落下復帰（壁から離れた直後・Ctrlキー降下時に、その場の実際の床面高さまで戻す）
+  if (isFalling) {
+    groundRaycaster.set(new THREE.Vector3(character.position.x, character.position.y + 3, character.position.z), new THREE.Vector3(0,-1,0));
+    groundRaycaster.far = 30;
+    // 建物・壁(isWall)は対象から除外（屋上に乗ってしまう不具合・床へのめり込み対策）
+    const targets = groundMeshes.length ? groundMeshes.concat(colliderMeshes.filter(m=>!m.userData.isWall)) : colliderMeshes.filter(m=>!m.userData.isWall);
+    const hits = groundRaycaster.intersectObjects(targets, false);
+    const groundHit = pickGroundHit(hits, character.position.y);
+    // 床が見つからない場合は現在の高さを維持する（0へ強制的に落とさない＝めり込み防止）
+    const fallTargetY = groundHit ? groundHit.point.y : character.position.y;
+    character.position.y += (fallTargetY - character.position.y) * Math.min(1, dt * 6);
+    if (Math.abs(fallTargetY - character.position.y) < 0.01) { character.position.y = fallTargetY; isFalling = false; isFloating = false; }
+  }
+
+  // --- Spaceキー長押しで上昇（張り付き可能な壁・障害物の近くにいる間だけ有効）---
+  // 「今いる場所の近くに、張り付ける壁・家具が何かあるか」を毎フレーム直接スキャンして判定する。
+  // (以前は最初に掴んだ1つの対象だけを追跡していたが、水平距離の判定基準は正しくても、
+  //  何らかの理由でその対象への参照が更新されないケースがあると「離れても支え扱いのまま」に
+  //  なりうるため、より確実な「周囲に何か支えがあるか」の直接チェックに変更した)
+  const RISE_SPEED = 3.0;
+  const FLOAT_HOLD_RANGE = ATTACH_RANGE + 0.5;
+  function hasNearbySupport(){
+    for (let i=0; i<colliders.length; i++){
+      const c = colliders[i];
+      if (!c.mesh.userData.isStickable) continue;
+      const box = c.box;
+      const cx = Math.max(box.min.x, Math.min(character.position.x, box.max.x));
+      const cz = Math.max(box.min.z, Math.min(character.position.z, box.max.z));
+      const dx = character.position.x - cx, dz = character.position.z - cz;
+      if (dx*dx + dz*dz < FLOAT_HOLD_RANGE*FLOAT_HOLD_RANGE) return true;
+    }
+    return false;
+  }
+
+  if (!wallMode) {
+    const supported = hasNearbySupport();
+    if (keys.space && supported) {
+      character.position.y = Math.min(character.position.y + RISE_SPEED * dt, CEILING_LIMIT_Y);
+      isFalling = false;
+      isFloating = true;
+    } else if (isFloating && !supported) {
+      // 支え(壁・アイテム)が周囲になくなった＝本当に離れた場合だけ、即座に自動で落下させる
+      isFloating = false;
+      isFalling = true;
+    }
+    // isFloating中でも、周りに支えがある限りはSpaceを離してもそのまま張り付いた状態を維持する
+  }
+
+  if (wallMode) {
+    // --- 壁面移動：W/Sでよじ登り・降り、A/Dで横移動 ---
+    const moveUp   = (keys.w?1:0) - (keys.s?1:0);
+    const moveSide = (keys.d?1:0) - (keys.a?1:0);
+    if ((moveUp !== 0 || moveSide !== 0) && wallTargetBox) {
+      const tangentUp = new THREE.Vector3(0,1,0);
+      const tangentRight = new THREE.Vector3().crossVectors(tangentUp, wallNormal).normalize();
+      const speed = animState.moveSpeed * (keys.shift ? DASH_MULTIPLIER : 1) * POSES.flatten.speedMul;
+      const newPos = character.position.clone()
+        .addScaledVector(tangentUp, moveUp * speed * dt)
+        .addScaledVector(tangentRight, moveSide * speed * dt);
+      const clamped = clampToWallFace(newPos, wallTargetBox, wallNormal);
+      character.position.copy(clamped).addScaledVector(wallNormal, 0.05);
+    }
+  } else if (moving) {
+    // --- 地上移動：カメラのyawを基準にした前後左右（TPS標準の操作感） ---
+    // ※カメラはキャラクターより「sin(yaw),cos(yaw)」側＝背後に位置しているため、
+    //   実際にカメラが見ている向き（=前進方向）はその逆向きになる。
+    const forward = new THREE.Vector3(-Math.sin(camRig.yaw), 0, -Math.cos(camRig.yaw));
+    const right = new THREE.Vector3(-forward.z, 0, forward.x);
+    const dir = new THREE.Vector3();
+    if (keys.w) dir.add(forward);
+    if (keys.s) dir.sub(forward);
+    if (keys.d) dir.add(right);
+    if (keys.a) dir.sub(right);
+
+    if (dir.lengthSq() > 0.0001) {
+      dir.normalize();
+      const speed = animState.moveSpeed * (keys.shift ? DASH_MULTIPLIER : 1) * POSES[currentPose].speedMul;
+      character.position.addScaledVector(dir, speed * dt);
+      resolveCollisions(character.position);
+      const targetAngle = Math.atan2(dir.x, dir.z);
+      let cur = character.rotation.y;
+      let diff = ((targetAngle - cur + Math.PI) % (Math.PI*2)) - Math.PI;
+      character.rotation.y += diff * Math.min(1, dt*10);
+    }
+  }
+
+  // どんな状況でも最終的にエリア外には出さない（衝突判定の取りこぼし対策の保険）
+  const BOUND_MARGIN = 0.5;
+  const clampLimit = mapHalf - BOUND_MARGIN;
+  character.position.x = THREE.MathUtils.clamp(character.position.x, -clampLimit, clampLimit);
+  character.position.z = THREE.MathUtils.clamp(character.position.z, -clampLimit, clampLimit);
+  // 天井についても同様に、どの経路(上昇/壁のよじ登り/落下復帰)で来ても貫通しないよう保険をかける
+  character.position.y = Math.min(character.position.y, CEILING_LIMIT_Y);
+
+  // 状態表示UI更新
+  stateTag.textContent = "状態: " + (moving ? "Walk" : "Idle")
+    + " / ポーズ: " + POSES[currentPose].label
+    + (wallMode ? " / 壁面密着中（" + (wallTarget && wallTarget.userData.bgName || "壁") + "）" : "");
+
+  // 「Eキーで張り付く」等のヒント表示は廃止（常に非表示）
+  wallHintEl.style.display = "none";
+}
+
+/* =========================================================
+   ブラシカーソル（命中点にリングを表示）
+   ========================================================= */
+// リングの内径・外径の比率をごく薄くすることで、実際に塗られる円の輪郭に
+// ぴったり沿った「細い線」だけのガイドにする（中心が塗りつぶされていないので、
+// リングの内側＝実際に塗る場所がそのまま見える）
+const cursorRing = new THREE.Mesh(
+  new THREE.RingGeometry(0.96, 1.0, 48),
+  new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide, transparent:true, opacity:0.95, depthTest:false })
+);
+cursorRing.renderOrder = 999;
+cursorRing.visible = false;
+scene.add(cursorRing);
+
+// 中心点は「以前は常に固定サイズ(半径0.06)」だったため、ブラシを最小(半径0.005程度)
+// にしても縮まらず、実際のガイドサイズとズレて太く邪魔に見える原因になっていた。
+// ブラシ半径に比例した小さな十字マークにすることで、常に実サイズと一致させつつ、
+// 塗る場所そのものを覆い隠さないようにする。
+const cursorCrossGeo = new THREE.PlaneGeometry(1, 1);
+const cursorCrossH = new THREE.Mesh(cursorCrossGeo, new THREE.MeshBasicMaterial({ color:0xffffff, side:THREE.DoubleSide, depthTest:false, transparent:true, opacity:0.95 }));
+const cursorCrossV = new THREE.Mesh(cursorCrossGeo, new THREE.MeshBasicMaterial({ color:0xffffff, side:THREE.DoubleSide, depthTest:false, transparent:true, opacity:0.95 }));
+cursorCrossH.renderOrder = 1000;
+cursorCrossV.renderOrder = 1000;
+cursorCrossH.visible = false;
+cursorCrossV.visible = false;
+scene.add(cursorCrossH);
+scene.add(cursorCrossV);
+
+function setCursorAt(point, normal, radiusWorld, colorHex){
+  cursorRing.visible = true;
+  cursorCrossH.visible = true;
+  cursorCrossV.visible = true;
+  cursorRing.position.copy(point).addScaledVector(normal, 0.02);
+  const crossOffset = point.clone().addScaledVector(normal, 0.022);
+  const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,0,1), normal);
+  cursorRing.quaternion.copy(q);
+  cursorRing.scale.setScalar(radiusWorld);
+  cursorRing.material.color.set(colorHex);
+
+  // 中心の目印は「実際に塗る中心」を示す最小限のサイズにとどめ、円の輪郭(リング)を
+  // 見た目の基準にする（十字の長さ・太さはブラシ半径の一部だけを使う控えめなサイズ）
+  const crossLen = Math.min(radiusWorld * 0.5, 0.03);
+  const crossThickness = Math.max(crossLen * 0.12, 0.0015);
+  cursorCrossH.position.copy(crossOffset);
+  cursorCrossV.position.copy(crossOffset);
+  cursorCrossH.quaternion.copy(q);
+  cursorCrossV.quaternion.copy(q).multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,0,1), Math.PI/2));
+  cursorCrossH.scale.set(crossLen*2, crossThickness, 1);
+  cursorCrossV.scale.set(crossLen*2, crossThickness, 1);
+  cursorCrossH.material.color.set(colorHex);
+  cursorCrossV.material.color.set(colorHex);
+}
+function hideCursor(){ cursorRing.visible = false; cursorCrossH.visible = false; cursorCrossV.visible = false; }
+
+/* =========================================================
+   お絵描きシステム（Raycasting -> UV -> Canvas描画）
+   ========================================================= */
+const raycaster = new THREE.Raycaster();
+const pointerNDC = new THREE.Vector2();
+let isPainting = false;
+let lastPointerClient = null; // ストローク補間（線が途切れないようにする）用の直前のポインタ座標
+let isEyedropperMode = false;
+
+const brushColorInput = document.getElementById("brush-color");
+const brushSizeInput  = document.getElementById("brush-size");
+const brushSizeVal    = document.getElementById("brush-size-val");
+brushSizeInput.addEventListener("input", ()=>{ brushSizeVal.textContent = brushSizeInput.value; });
+
+// 「太さ」スライダーの値(mm)を、キャラクター表面上の物理的な直径（ワールド座標）に変換する。
+// スライダー値 -> ワールド距離 の変換係数を固定しておくことで、
+// ・実際に塗られる円のサイズ
+// ・塗る前に表示するガイド(リング)のサイズ
+// が常に完全に一致するようになる（＝ガイドが信頼できるようになる）。
+const BRUSH_WORLD_PER_MM = 0.005; // 1mmあたりのワールド距離（従来のデフォルト見た目に近くなるよう調整済み）
+function getBrushDiameterWorld(){
+  return parseFloat(brushSizeInput.value) * BRUSH_WORLD_PER_MM;
+}
+// パーツごとの「キャンバス1px = ワールド距離」の比率に基づき、
+// 直径(ワールド)を、そのパーツのキャンバス上での半径(px)に変換する。
+// パーツの物理サイズ(worldSize)に対する比率で計算するため、
+// 頭・胴体・腕など大きさの違うパーツでも「同じ物理的な太さの点」になる。
+function getBrushRadiusPxForPart(part){
+  const diameterWorld = getBrushDiameterWorld();
+  const pxPerWorldUnit = PAINT_CANVAS_SIZE / part.worldSize;
+  return Math.max(1, (diameterWorld * pxPerWorldUnit) / 2);
+}
+
+const eyedropperBtn = document.getElementById("eyedropper-btn");
+const eyedropPreview = document.getElementById("eyedrop-preview");
+const eyedropRing = eyedropPreview.querySelector(".ring");
+const eyedropHex  = eyedropPreview.querySelector(".hex");
+const recentColorsEl = document.getElementById("recent-colors");
+const recentColors = [];
+
+eyedropperBtn.addEventListener("click", ()=>{
+  isEyedropperMode = !isEyedropperMode;
+  eyedropperBtn.classList.toggle("active", isEyedropperMode);
+  eyedropperBtn.textContent = isEyedropperMode
+    ? "🧪 スポイトON（背景にカーソルを合わせてクリック）"
+    : "🧪 スポイト (背景クリックで色取得)";
+  if (!isEyedropperMode) eyedropPreview.style.display = "none";
+});
+
+function addRecentColor(hex){
+  if (recentColors.includes(hex)) return;
+  recentColors.unshift(hex);
+  if (recentColors.length > 8) recentColors.pop();
+  renderRecentColors();
+}
+function renderRecentColors(){
+  recentColorsEl.innerHTML = "";
+  recentColors.forEach(hex=>{
+    const sw = document.createElement("div");
+    sw.className = "swatch";
+    sw.style.background = hex;
+    sw.title = hex;
+    sw.addEventListener("click", ()=>{ brushColorInput.value = hex; });
+    recentColorsEl.appendChild(sw);
+  });
+}
+
+document.getElementById("clear-btn").addEventListener("click", ()=>{
+  paintableParts.forEach(p=>{
+    p.ctx.fillStyle = "#ffffff";
+    p.ctx.fillRect(0,0,p.canvas.width,p.canvas.height);
+    p.texture.needsUpdate = true;
+  });
+});
+
+function getPointerNDC(event){
+  const rect = renderer.domElement.getBoundingClientRect();
+  pointerNDC.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+  pointerNDC.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+}
+
+function paintAtUV(part, uv, color, radiusPx){
+  const x = uv.x * part.canvas.width;
+  const y = (1 - uv.y) * part.canvas.height;
+  part.ctx.fillStyle = color;
+  part.ctx.beginPath();
+  part.ctx.arc(x, y, radiusPx, 0, Math.PI*2);
+  part.ctx.fill();
+  part.texture.needsUpdate = true;
+}
+
+// 画面上の1点をraycastし、命中したパーツに「直径○mmの点」を1つだけ描く。
+// 以前は太いブラシを点の集まり（多点サンプリング）で近似していたため、
+// 点と点の間に隙間ができてモザイク状・斑点状に見えてしまっていた。
+// 円は1つだけにし、太さスライダーの値がそのままこの円の直径になるようにする。
+function paintBrushAtClient(clientX, clientY){
+  const rect = renderer.domElement.getBoundingClientRect();
+  if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) {
+    return { painted: false, lastHit: null };
+  }
+  pointerNDC.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+  pointerNDC.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+  raycaster.setFromCamera(pointerNDC, camera);
+  const meshes = paintableParts.map(p=>p.mesh);
+  const hits = raycaster.intersectObjects(meshes, false);
+  if (hits.length === 0 || !hits[0].uv) return { painted: false, lastHit: null };
+
+  const hit = hits[0];
+  const part = paintableParts.find(p => p.mesh === hit.object);
+  const radiusPx = getBrushRadiusPxForPart(part);
+  paintAtUV(part, hit.uv, brushColorInput.value, radiusPx);
+  return { painted: true, lastHit: hit };
+}
+
+// ドラッグで素早く動かしてもストロークが途切れないよう、前回位置との間を細かく
+// 補間しながら1点ずつ塗っていく（点同士がしっかり重なるので、なめらかな一本の線になる）
+const STROKE_STEP_PX = 3; // この間隔（画面px）でスタンプを重ねる
+function paintStroke(fromX, fromY, toX, toY){
+  const dist = Math.hypot(toX - fromX, toY - fromY);
+  const steps = Math.min(200, Math.max(1, Math.ceil(dist / STROKE_STEP_PX)));
+  let painted = false, lastHit = null;
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps;
+    const res = paintBrushAtClient(fromX + (toX - fromX) * t, fromY + (toY - fromY) * t);
+    if (res.painted) { painted = true; lastHit = res.lastHit; }
+  }
+  return { painted, lastHit };
+}
+
+// 塗る前のガイド（リング）は、実際にpaintAtUVで塗られる円と全く同じ計算式で
+// サイズを決める。こうすることで「ガイドの大きさ＝実際に塗られる大きさ」に
+// 常に一致し、ガイドが信頼できるようになる。
+function showPaintCursor(hit){
+  if (!hit) return;
+  const part = paintableParts.find(p => p.mesh === hit.object);
+  const radiusWorld = getBrushDiameterWorld() / 2;
+  const normal = hit.face.normal.clone().transformDirection(hit.object.matrixWorld).normalize();
+  setCursorAt(hit.point, normal, Math.max(radiusWorld, 0.01), brushColorInput.value);
+}
+
+function handlePaintHover(event, doPaint){
+  getPointerNDC(event);
+  raycaster.setFromCamera(pointerNDC, camera);
+  const meshes = paintableParts.map(p=>p.mesh);
+  const hits = raycaster.intersectObjects(meshes, false);
+  if (hits.length === 0) { hideCursor(); return false; }
+  const hit = hits[0];
+  if (!hit.uv) { hideCursor(); return false; }
+
+  showPaintCursor(hit);
+  if (doPaint) paintBrushAtClient(event.clientX, event.clientY);
+  return true;
+}
+
+// 実際に描画されたピクセルの色を取得する（テクスチャ・ライティング・影なども
+// すべて反映された「画面そのものをキャプチャした」色になるため、マテリアルの
+// 基本色だけを見る方式と違い、白や黒だけになってしまう問題が起きない）
+const eyedropPixelBuf = new Uint8Array(4);
+function sampleScreenPixelColor(clientX, clientY){
+  const rect = renderer.domElement.getBoundingClientRect();
+  const xCss = clientX - rect.left;
+  const yCss = clientY - rect.top;
+  if (xCss < 0 || yCss < 0 || xCss > rect.width || yCss > rect.height) return null;
+
+  const gl = renderer.getContext();
+  const pr = renderer.getPixelRatio ? renderer.getPixelRatio() : 1;
+  const px = Math.min(gl.drawingBufferWidth - 1, Math.max(0, Math.round(xCss * pr)));
+  // WebGLのreadPixelsは左下原点なのでYを反転させる
+  const py = Math.min(gl.drawingBufferHeight - 1, Math.max(0, Math.round((rect.height - yCss) * pr)));
+
+  gl.readPixels(px, py, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, eyedropPixelBuf);
+  const toHex = (v)=> v.toString(16).padStart(2, "0");
+  return "#" + toHex(eyedropPixelBuf[0]) + toHex(eyedropPixelBuf[1]) + toHex(eyedropPixelBuf[2]);
+}
+
+function handleEyedropperHover(event, doPick){
+  const hexColor = sampleScreenPixelColor(event.clientX, event.clientY);
+  if (!hexColor) { eyedropPreview.style.display = "none"; return; }
+
+  // ラベル表示用に「何の上にカーソルがあるか」だけ簡易的にレイキャストで調べる（任意情報）
+  getPointerNDC(event);
+  raycaster.setFromCamera(pointerNDC, camera);
+  const hits = raycaster.intersectObjects(backgroundObjects.concat([ground, character]), true);
+  const label = hits.length > 0 ? (hits[0].object.userData.bgName || (hits[0].object.userData.isCharacterPart ? "自分の体" : "")) : "";
+
+  eyedropPreview.style.display = "block";
+  eyedropPreview.style.left = event.clientX + "px";
+  eyedropPreview.style.top = event.clientY + "px";
+  eyedropRing.style.background = hexColor;
+  eyedropHex.textContent = hexColor + (label ? " (" + label + ")" : "");
+
+  if (doPick) {
+    brushColorInput.value = hexColor;
+    addRecentColor(hexColor);
+    flashEyedropperFeedback();
+  }
+  return hexColor;
+}
+
+function flashEyedropperFeedback(){
+  eyedropRing.style.boxShadow = "0 0 0 4px #fff, 0 0 18px " + brushColorInput.value;
+  setTimeout(()=>{ eyedropRing.style.boxShadow = ""; }, 250);
+}
+
+let paintDisabledExternally = false; // オンライン対戦中(ロビー以外)はペイント操作を止める
+renderer.domElement.addEventListener("pointerdown", (e)=>{
+  if (e.button !== 0) return; // 左クリックのみ（右クリックはカメラ旋回）
+  if (paintDisabledExternally) return;
+  if (isEyedropperMode) {
+    const picked = handleEyedropperHover(e, true);
+    if (picked) {
+      // 色を取得したら自動でスポイトモードを終了し、そのまま塗れるようにする
+      isEyedropperMode = false;
+      eyedropperBtn.classList.remove("active");
+      eyedropperBtn.textContent = "🧪 スポイト (背景クリックで色取得)";
+      eyedropPreview.style.display = "none";
+    }
+    return;
+  }
+  lastPointerClient = { x: e.clientX, y: e.clientY };
+  const res = paintBrushAtClient(e.clientX, e.clientY);
+  if (res.painted) {
+    isPainting = true;
+    showPaintCursor(res.lastHit);
+  }
+});
+window.addEventListener("pointermove", (e)=>{
+  if (isEyedropperMode) {
+    handleEyedropperHover(e, false);
+    return;
+  }
+  if (isPainting && lastPointerClient) {
+    const res = paintStroke(lastPointerClient.x, lastPointerClient.y, e.clientX, e.clientY);
+    lastPointerClient = { x: e.clientX, y: e.clientY };
+    if (res.lastHit) showPaintCursor(res.lastHit);
+  } else {
+    handlePaintHover(e, false);
+  }
+});
+window.addEventListener("pointerup", ()=>{
+  if (isPainting) { isPainting = false; lastPointerClient = null; }
+});
+
+document.getElementById("paint-mode-tag").style.display = "block"; // 常時ペイント可能であることを明示
+
+/* =========================================================
+   メインループ
+   ========================================================= */
+const clock = new THREE.Clock();
+function animate(){
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.05);
+  updateAnimation(dt);
+  if (window.__CH && window.__CH.overrideCamera) {
+    window.__CH.overrideCamera(dt);
+  } else {
+    updateTPSCamera(dt, false);
+  }
+  updateShadowFollow();
+  renderer.render(scene, camera);
+  if (window.__CH && window.__CH.onFrame) window.__CH.onFrame(dt);
+}
+animate();
+updatePoseButtonsUI();
+
+// ===== オンライン対戦(かくれんぼ)モジュールに内部オブジェクトを橋渡しする =====
+window.__CH = window.__CH || {};
+Object.assign(window.__CH, {
+  THREE, scene, camera, renderer, character, camRig, updateTPSCamera,
+  CHAR_SCALE, CAMERA_EYE_HEIGHT, mapHalf, colliders,
+  resolveCollisions, keys, setSizeMultiplier,
+  setPaintDisabled(v){ paintDisabledExternally = v; },
+  setOrbiting(v){ isOrbiting = v; },
+});
+
+})();
+</script>
+<script>
+(function(){
+"use strict";
+
+function whenReady(cb){
+  const iv = setInterval(function(){
+    if (window.__CH && window.__CH.character) { clearInterval(iv); cb(); }
+  }, 50);
+}
+
+whenReady(function(){
+const CH = window.__CH;
+const THREE = CH.THREE;
+
+/* ===== 定数 ===== */
+const HIDE_DURATION = 60000;   // 隠れる時間 60秒
+const SEEK_DURATION = 240000;  // 鬼の探索時間 4分（時間切れで隠れる側の勝利）
+const SHOOT_RANGE = 60;
+const HIT_RADIUS = 0.28;
+const COLORS = ["#ff5555","#55aaff","#55dd88","#ffcc33","#cc66ff","#ff88bb","#66eeee","#ffa04d"];
+
+/* ===== 状態 ===== */
+let peer = null;
+let isHost = false;
+let myId = null;
+let myName = "プレイヤー" + Math.floor(Math.random()*1000);
+let hostConn = null;               // ゲスト -> ホストへの接続
+let guestConns = {};                // ホストが持つ、各ゲストへの接続
+let players = {};                   // id -> {id,name,color,role,x,y,z,ry,connected}
+let phase = "lobby";                // lobby / hiding / seeking / ended
+let lastPhase = "lobby";
+let hideEndTime = 0;
+let seekEndTime = 0;
+let winnerTeam = null;
+let remoteAvatars = {};             // id -> THREE.Group
+let fpsActive = false;
+let mySizeMul = 1;
+
+/* ===== DOM ===== */
+const mpToggle   = document.getElementById("mp-toggle");
+const mpOverlay  = document.getElementById("mp-overlay");
+const mpPanel    = document.getElementById("mp-panel");
+const mpHud      = document.getElementById("mp-hud");
+const mpBlackout = document.getElementById("mp-blackout");
+const mpEnd      = document.getElementById("mp-end");
+const mpGun      = document.getElementById("mp-gun");
+const crosshairEl = document.getElementById("crosshair");
+
+mpToggle.addEventListener("click", ()=>{
+  mpOverlay.style.display = (mpOverlay.style.display === "flex") ? "none" : "flex";
+  renderPanel();
+});
+
+document.getElementById("mp-back-to-lobby").addEventListener("click", ()=>{
+  if (isHost) {
+    Object.values(players).forEach(p=>{ p.role = "hider"; });
+    phase = "lobby";
+    hideEndTime = 0; seekEndTime = 0; winnerTeam = null;
+    broadcastState();
+  }
+  mpEnd.style.display = "none";
+});
+
+/* ===== 色割り当て ===== */
+function colorForIndex(i){ return COLORS[i % COLORS.length]; }
+function mkPlayer(id, name){
+  const idx = Object.keys(players).length;
+  return { id, name, color: colorForIndex(idx), role:"hider", x:0, y:0, z:0, ry:0, connected:true };
+}
+
+/* ===============================================================
+   ホスト：ロビー・接続受付
+   =============================================================== */
+function becomeHost(){
+  peer = new Peer();
+  peer.on("open", (id)=>{
+    myId = id; isHost = true;
+    players[id] = mkPlayer(id, myName);
+    renderPanel();
+  });
+  peer.on("connection", (conn)=>{
+    conn.on("open", ()=>{ guestConns[conn.peer] = conn; });
+    conn.on("data", (data)=> handleHostData(conn, data));
+    conn.on("close", ()=>{
+      delete guestConns[conn.peer];
+      delete players[conn.peer];
+      delete remoteAvatars[conn.peer] && removeAvatar(conn.peer);
+      broadcastState();
+    });
+  });
+  peer.on("error", (err)=>{ setStatus("エラー: " + err.type); });
+  setStatus("ホストID発行中…");
+}
+
+function handleHostData(conn, data){
+  if (!data || !data.type) return;
+  if (data.type === "join") {
+    if (!players[conn.peer]) players[conn.peer] = mkPlayer(conn.peer, data.name || "ゲスト");
+    else players[conn.peer].name = data.name || players[conn.peer].name;
+    broadcastState();
+  } else if (data.type === "pos") {
+    const p = players[conn.peer];
+    if (p) { p.x = data.x; p.y = data.y; p.z = data.z; p.ry = data.ry; }
+  } else if (data.type === "shoot") {
+    handleShoot(conn.peer, data.origin, data.dir);
+  }
+}
+
+/* ===============================================================
+   ゲスト：ホストへ接続
+   =============================================================== */
+function becomeGuest(hostId){
+  peer = new Peer();
+  peer.on("open", (id)=>{
+    myId = id; isHost = false;
+    hostConn = peer.connect(hostId, { reliable:true });
+    hostConn.on("open", ()=>{
+      hostConn.send({ type:"join", name: myName });
+      setStatus("ホストに接続しました");
+      renderPanel();
+    });
+    hostConn.on("data", (data)=> handleGuestData(data));
+    hostConn.on("close", ()=>{ setStatus("ホストとの接続が切れました"); });
+  });
+  peer.on("error", (err)=>{ setStatus("エラー: " + err.type); });
+  setStatus("ホストに接続中…");
+}
+
+function handleGuestData(data){
+  if (!data || data.type !== "state") return;
+  applyState(data);
+}
+
+/* ===============================================================
+   状態の同期
+   =============================================================== */
+function broadcastState(){
+  if (!isHost) return;
+  const snapshot = { type:"state", phase, hideEndTime, seekEndTime, winnerTeam, players };
+  Object.values(guestConns).forEach(c=>{ if (c.open) { try { c.send(snapshot); } catch(e){} } });
+  applyState(snapshot);
+}
+
+function applyState(snapshot){
+  players = snapshot.players || players;
+  phase = snapshot.phase;
+  hideEndTime = snapshot.hideEndTime;
+  seekEndTime = snapshot.seekEndTime;
+  winnerTeam = snapshot.winnerTeam;
+
+  if (phase !== lastPhase) {
+    onPhaseChanged(lastPhase, phase);
+    lastPhase = phase;
+  }
+  renderPanel();
+  renderHud();
+  updateRoleVisuals();
+}
+
+function onPhaseChanged(from, to){
+  if (to === "hiding") {
+    mpOverlay.style.display = "none";
+    CH.character.position.set(0, CH.character.position.y, 0);
+  }
+  if (to === "seeking") {
+    const me = players[myId];
+    if (me && me.role === "oni") {
+      CH.character.position.set(0, CH.character.position.y, 0);
+    }
+  }
+  if (to === "ended") {
+    showEndScreen();
+  }
+  if (to === "lobby") {
+    mpEnd.style.display = "none";
+    mpOverlay.style.display = "flex";
+    exitFpsMode();
+    CH.setSizeMultiplier(1);
+    mySizeMul = 1;
+  }
+}
+
+/* ===============================================================
+   ゲーム開始・フェーズ進行（ホストのみ実行）
+   =============================================================== */
+function startGame(){
+  if (!isHost) return;
+  const ids = Object.keys(players);
+  if (ids.length < 2) { alert("2人以上そろってから開始してください"); return; }
+  const oniId = ids[Math.floor(Math.random() * ids.length)];
+  ids.forEach(id=>{
+    players[id].role = (id === oniId) ? "oni" : "hider";
+    players[id].x = 0; players[id].y = 0; players[id].z = 0;
+  });
+  phase = "hiding";
+  hideEndTime = Date.now() + HIDE_DURATION;
+  seekEndTime = 0;
+  winnerTeam = null;
+  broadcastState();
+}
+
+function startSeekPhase(){
+  if (!isHost) return;
+  phase = "seeking";
+  seekEndTime = Date.now() + SEEK_DURATION;
+  Object.values(players).forEach(p=>{ if (p.role === "oni") { p.x = 0; p.y = 0; p.z = 0; } });
+  broadcastState();
+}
+
+function endGame(winner){
+  if (!isHost) return;
+  phase = "ended";
+  winnerTeam = winner;
+  broadcastState();
+}
+
+function checkWin(){
+  if (!isHost) return;
+  const hidersLeft = Object.values(players).filter(p=>p.role === "hider").length;
+  if (hidersLeft === 0) endGame("oni");
+}
+
+/* ホストの定期チェック（60秒経過・4分経過） */
+setInterval(()=>{
+  if (!isHost) return;
+  const now = Date.now();
+  if (phase === "hiding" && now >= hideEndTime) startSeekPhase();
+  if (phase === "seeking" && now >= seekEndTime) endGame("hider");
+}, 300);
+
+/* ===============================================================
+   位置同期（100msごと）
+   =============================================================== */
+setInterval(()=>{
+  if (!myId) return;
+  const p = CH.character.position;
+  const ry = CH.character.rotation.y;
+  if (isHost) {
+    if (players[myId]) { players[myId].x = p.x; players[myId].y = p.y; players[myId].z = p.z; players[myId].ry = ry; }
+    broadcastState();
+  } else if (hostConn && hostConn.open) {
+    try { hostConn.send({ type:"pos", x:p.x, y:p.y, z:p.z, ry }); } catch(e){}
+  }
+}, 100);
+
+/* ===============================================================
+   射撃・当たり判定（ホストが判定を行う）
+   =============================================================== */
+function handleShoot(shooterId, origin, dir){
+  if (phase !== "seeking") return;
+  const shooter = players[shooterId];
+  if (!shooter || shooter.role !== "oni") return;
+  const o = new THREE.Vector3(origin.x, origin.y, origin.z);
+  const d = new THREE.Vector3(dir.x, dir.y, dir.z).normalize();
+  let bestId = null, bestT = Infinity;
+  Object.values(players).forEach(p=>{
+    if (p.role !== "hider") return;
+    const target = new THREE.Vector3(p.x, p.y + CH.CAMERA_EYE_HEIGHT * 0.6, p.z);
+    const toTarget = target.clone().sub(o);
+    const t = toTarget.dot(d);
+    if (t < 0 || t > SHOOT_RANGE) return;
+    const closest = o.clone().addScaledVector(d, t);
+    const dist = closest.distanceTo(target);
+    if (dist < HIT_RADIUS && t < bestT) { bestT = t; bestId = p.id; }
+  });
+  if (bestId) {
+    players[bestId].role = "oni";
+    broadcastState();
+    checkWin();
+  }
+}
+
+function fireShot(){
+  if (!(phase === "seeking" && players[myId] && players[myId].role === "oni")) return;
+  const dir = new THREE.Vector3();
+  CH.camera.getWorldDirection(dir);
+  const origin = CH.camera.position.clone();
+  const payload = { origin:{x:origin.x,y:origin.y,z:origin.z}, dir:{x:dir.x,y:dir.y,z:dir.z} };
+  if (isHost) handleShoot(myId, payload.origin, payload.dir);
+  else if (hostConn && hostConn.open) hostConn.send({ type:"shoot", ...payload });
+  mpGun.classList.add("fire");
+  setTimeout(()=>mpGun.classList.remove("fire"), 90);
+}
+
+CH.renderer.domElement.addEventListener("pointerdown", (e)=>{
+  if (e.button === 0 && fpsActive) fireShot();
+});
+
+/* ===============================================================
+   FPSモード（鬼の一人称視点・銃・クロスヘア）
+   =============================================================== */
+function enterFpsMode(){
+  fpsActive = true;
+  CH.setOrbiting(true);
+  if (CH.renderer.domElement.requestPointerLock) CH.renderer.domElement.requestPointerLock();
+  mpGun.style.display = "block";
+  crosshairEl.style.display = "block";
+}
+function exitFpsMode(){
+  fpsActive = false;
+  CH.setOrbiting(false);
+  if (document.pointerLockElement) document.exitPointerLock();
+  mpGun.style.display = "none";
+}
+
+CH.overrideCamera = function(dt){
+  if (fpsActive) {
+    const eyeY = CH.character.position.y + CH.CAMERA_EYE_HEIGHT * mySizeMul;
+    CH.camera.rotation.order = "YXZ";
+    CH.camera.position.set(CH.character.position.x, eyeY, CH.character.position.z);
+    CH.camera.rotation.set(CH.camRig.pitch, CH.camRig.yaw, 0);
+  } else {
+    CH.updateTPSCamera(dt, false);
+  }
+};
+
+/* 役割に応じた見た目・操作モードの切り替え */
+let lastRole = null;
+function updateRoleVisuals(){
+  const me = players[myId];
+  const role = me ? me.role : "hider";
+  const inGame = (phase === "hiding" || phase === "seeking");
+
+  CH.setPaintDisabled(inGame);
+
+  if (role !== lastRole) {
+    lastRole = role;
+    if (role === "oni") { CH.setSizeMultiplier(2); mySizeMul = 2; }
+    else { CH.setSizeMultiplier(1); mySizeMul = 1; }
+  }
+
+  if (phase === "hiding" && role === "oni") {
+    mpBlackout.style.display = "flex";
+    exitFpsMode();
+  } else {
+    mpBlackout.style.display = "none";
+  }
+
+  if (phase === "seeking" && role === "oni") {
+    if (!fpsActive) enterFpsMode();
+  } else if (fpsActive) {
+    exitFpsMode();
+  }
+}
+
+/* ===============================================================
+   リモートプレイヤーの簡易アバター表示
+   隠れる(hiding)フェーズ中はお互いに見えない。探す(seeking)フェーズに
+   入ってから初めて姿が見えるようになる。
+   =============================================================== */
+function makeAvatar(color){
+  const g = new THREE.Group();
+  const bodyMat = new THREE.MeshStandardMaterial({ color });
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.10, 0.12, 0.34, 10), bodyMat);
+  body.position.y = 0.17 + 0.30 * CH.CAMERA_EYE_HEIGHT * 0; // baseline (再計算は下のscaleで対応)
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.09, 10, 10), bodyMat);
+  g.add(body); g.add(head);
+  body.position.y = CH.CAMERA_EYE_HEIGHT * 0.55;
+  head.position.y = CH.CAMERA_EYE_HEIGHT * 0.95;
+  g.castShadow = true;
+  return g;
+}
+function ensureAvatar(id, color){
+  if (!remoteAvatars[id]) {
+    const g = makeAvatar(color);
+    CH.scene.add(g);
+    remoteAvatars[id] = g;
+  }
+  return remoteAvatars[id];
+}
+function removeAvatar(id){
+  const g = remoteAvatars[id];
+  if (g) { CH.scene.remove(g); delete remoteAvatars[id]; }
+}
+function updateAvatars(){
+  const visible = (phase === "seeking" || phase === "ended");
+  Object.keys(remoteAvatars).forEach(id=>{ if (!players[id]) removeAvatar(id); });
+  Object.values(players).forEach(p=>{
+    if (p.id === myId) return;
+    if (!visible) { if (remoteAvatars[p.id]) remoteAvatars[p.id].visible = false; return; }
+    const av = ensureAvatar(p.id, p.color);
+    const scaleMul = p.role === "oni" ? 2 : 1;
+    av.scale.setScalar(scaleMul);
+    av.position.set(p.x, p.y, p.z);
+    av.rotation.y = p.ry || 0;
+    av.visible = true;
+  });
+}
+
+CH.onFrame = function(){
+  updateAvatars();
+};
+
+/* ===============================================================
+   HUD・ロビーUI描画
+   =============================================================== */
+function setStatus(msg){
+  const el = document.getElementById("mp-status");
+  if (el) el.textContent = msg;
+}
+
+function renderHud(){
+  const inGame = (phase === "hiding" || phase === "seeking");
+  mpHud.style.display = inGame ? "block" : "none";
+  mpToggle.style.display = inGame ? "none" : "block";
+  if (!inGame) return;
+  const me = players[myId];
+  const role = me ? me.role : "hider";
+  mpHud.className = "role-" + role;
+  mpHud.querySelector(".badge").textContent =
+    (role === "oni" ? "🔪 鬼" : "🙈 隠れる側") + (phase === "hiding" ? " / 隠れる時間" : " / 探索中");
+  const now = Date.now();
+  let remain = 0;
+  if (phase === "hiding") remain = Math.max(0, Math.ceil((hideEndTime - now)/1000));
+  else remain = Math.max(0, Math.ceil((seekEndTime - now)/1000));
+  mpHud.querySelector(".timer").textContent = remain + "s";
+  mpBlackout.querySelector(".timer").textContent = Math.max(0, Math.ceil((hideEndTime - now)/1000));
+}
+setInterval(renderHud, 250);
+
+function showEndScreen(){
+  mpEnd.style.display = "flex";
+  const r = mpEnd.querySelector(".result");
+  if (winnerTeam === "oni") {
+    r.textContent = "🔪 鬼の勝ち！全員見つけました";
+    r.className = "result oni-win";
+  } else {
+    r.textContent = "🙈 隠れる側の勝ち！最後まで見つかりませんでした";
+    r.className = "result hider-win";
+  }
+  exitFpsMode();
+}
+
+function renderPanel(){
+  if (!peer) {
+    mpPanel.innerHTML =
+      '<h2>🕹️ オンライン かくれんぼ</h2>' +
+      '<label>プレイヤー名</label>' +
+      '<input type="text" id="mp-name" value="' + myName + '">' +
+      '<button class="mp-btn primary" id="mp-host-btn">ホストになってロビーを作る</button>' +
+      '<h3>参加する</h3>' +
+      '<label>ホストのリンク or ID</label>' +
+      '<input type="text" id="mp-join-id" placeholder="リンクを貼るかIDを入力">' +
+      '<button class="mp-btn" id="mp-join-btn">参加する</button>' +
+      '<div id="mp-status"></div>';
+    document.getElementById("mp-host-btn").addEventListener("click", ()=>{
+      myName = document.getElementById("mp-name").value || myName;
+      becomeHost();
+    });
+    document.getElementById("mp-join-btn").addEventListener("click", ()=>{
+      myName = document.getElementById("mp-name").value || myName;
+      let v = document.getElementById("mp-join-id").value.trim();
+      const m = v.match(/[?&]join=([^&]+)/);
+      if (m) v = decodeURIComponent(m[1]);
+      if (v) becomeGuest(v);
+    });
+    return;
+  }
+
+  const list = Object.values(players).map(p=>{
+    return '<li class="' + (p.id === myId ? "me" : "") + '"><span>' +
+      '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:' + p.color + ';margin-right:6px;"></span>' +
+      p.name + (p.id === myId ? " (自分)" : "") + '</span><span>' + (p.id === (Object.keys(players)[0]) ? "👑" : "") + '</span></li>';
+  }).join("");
+
+  let linkHtml = "";
+  if (isHost) {
+    const link = location.href.split("?")[0] + "?join=" + myId;
+    linkHtml =
+      '<label>このリンクをゲストに送ってください</label>' +
+      '<div id="mp-link-row"><input type="text" id="mp-link" value="' + link + '" readonly><button id="mp-copy-btn">コピー</button></div>';
+  }
+
+  mpPanel.innerHTML =
+    '<h2>🕹️ ロビー</h2>' +
+    linkHtml +
+    '<h3>参加者 (' + Object.keys(players).length + '人)</h3>' +
+    '<ul id="mp-players">' + list + '</ul>' +
+    (isHost ? '<button class="mp-btn primary" id="mp-start-btn">ゲーム開始（ランダムで鬼を決定）</button>' : '<div id="mp-status">ホストの開始を待っています…</div>');
+
+  if (isHost) {
+    document.getElementById("mp-start-btn").addEventListener("click", startGame);
+    const copyBtn = document.getElementById("mp-copy-btn");
+    if (copyBtn) copyBtn.addEventListener("click", ()=>{
+      const input = document.getElementById("mp-link");
+      input.select();
+      try { document.execCommand("copy"); } catch(e){}
+      if (navigator.clipboard) navigator.clipboard.writeText(input.value).catch(()=>{});
+      copyBtn.textContent = "コピー済み";
+      setTimeout(()=>{ copyBtn.textContent = "コピー"; }, 1200);
+    });
+  }
+}
+
+/* ===============================================================
+   起動時：URLに ?join=ID があれば自動で入力欄にセット
+   =============================================================== */
+(function initAutoJoin(){
+  const params = new URLSearchParams(location.search);
+  const joinId = params.get("join");
+  mpOverlay.style.display = "flex";
+  renderPanel();
+  if (joinId) {
+    setTimeout(()=>{
+      const input = document.getElementById("mp-join-id");
+      if (input) input.value = joinId;
+    }, 0);
+  }
+})();
+
+});
+})();
+</script>
+
+<style>
+  #mp-gun.fire svg { filter: drop-shadow(0 0 14px #ffdd55) drop-shadow(0 6px 10px rgba(0,0,0,.6)); }
+</style>
+</body>
+</html>
