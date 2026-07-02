@@ -2439,6 +2439,8 @@ Object.assign(window.__CH, {
   ATLAS_COLS, ATLAS_ROWS, PAINT_CANVAS_SIZE, remapBoxUVsToAtlas,
   capturePaintSnapshot,
   consumePaintDirty(){ const d = paintDirty; paintDirty = false; return d; },
+  getCurrentPose(){ return currentPose; },
+  POSES,
 });
 
 })();
@@ -2512,7 +2514,7 @@ document.getElementById("mp-back-to-lobby").addEventListener("click", ()=>{
 function colorForIndex(i){ return COLORS[i % COLORS.length]; }
 function mkPlayer(id, name){
   const idx = Object.keys(players).length;
-  return { id, name, color: colorForIndex(idx), role:"hider", x:0, y:0, z:0, ry:0, connected:true };
+  return { id, name, color: colorForIndex(idx), role:"hider", x:0, y:0, z:0, ry:0, rx:0, pose:"stand", connected:true };
 }
 
 /* ===============================================================
@@ -2554,11 +2556,11 @@ function handleHostData(conn, data){
     broadcastState();
   } else if (data.type === "pos") {
     const p = players[conn.peer];
-    if (p) { p.x = data.x; p.y = data.y; p.z = data.z; p.ry = data.ry; }
+    if (p) { p.x = safeNum(data.x); p.y = safeNum(data.y); p.z = safeNum(data.z); p.ry = safeNum(data.ry); p.rx = safeNum(data.rx||0); p.pose = data.pose||"stand"; }
     // ゲストの位置更新を他の全ゲストへ即座に中継する（次の定期broadcastStateを待たない）
     Object.entries(guestConns).forEach(([pid, c])=>{
       if (pid === conn.peer || !c.open) return;
-      try { c.send({ type:"pos-relay", id: conn.peer, x: data.x, y: data.y, z: data.z, ry: data.ry }); } catch(e){}
+      try { c.send({ type:"pos-relay", id: conn.peer, x: safeNum(data.x), y: safeNum(data.y), z: safeNum(data.z), ry: safeNum(data.ry), rx: safeNum(data.rx||0), pose: data.pose||"stand" }); } catch(e){}
     });
   } else if (data.type === "shoot") {
     handleShoot(conn.peer, data.origin, data.dir);
@@ -2605,7 +2607,16 @@ function handleGuestData(data){
   } else if (data.type === "pos-relay") {
     // ホストから中継された他プレイヤーの位置を即座に反映する
     const p = players[data.id];
-    if (p) { p.x = data.x; p.y = data.y; p.z = data.z; p.ry = data.ry; }
+    if (p) { p.x = data.x; p.y = data.y; p.z = data.z; p.ry = data.ry; p.rx = data.rx||0; p.pose = data.pose||"stand"; }
+  } else if (data.type === "pos-all") {
+    // ホストからの軽量一括位置更新
+    const posData = data.data;
+    if (posData) {
+      Object.entries(posData).forEach(([id, d])=>{
+        const p = players[id];
+        if (p) { p.x = d.x; p.y = d.y; p.z = d.z; p.ry = d.ry; p.rx = d.rx||0; p.pose = d.pose||"stand"; }
+      });
+    }
   } else if (data.type === "paint-relay") {
     applyRemotePaint(data.id, data.images);
   } else if (data.type === "tracer") {
@@ -2712,18 +2723,39 @@ setInterval(()=>{
   if (phase === "seeking" && now >= seekEndTime) endGame("hider");
 }, 300);
 
+function safeNum(v){ return isFinite(v) ? v : 0; }
+
 /* ===============================================================
-   位置同期（50msごと）
+   位置同期（50msごと軽量位置更新 + 500msごとフルステート再同期）
+   毎回フルステートを送ると通信量が多く、PeerJS の送信キューが
+   詰まって「反映されたりされなかったり」する原因になるため、
+   軽量な位置だけの更新と、フルステートの定期再同期を分離する。
    =============================================================== */
+let fullSyncCounter = 0;
 setInterval(()=>{
   if (!myId) return;
   const p = CH.character.position;
   const ry = CH.character.rotation.y;
+  const rx = CH.character.rotation.x;
+  const pose = CH.getCurrentPose ? CH.getCurrentPose() : "stand";
   if (isHost) {
-    if (players[myId]) { players[myId].x = p.x; players[myId].y = p.y; players[myId].z = p.z; players[myId].ry = ry; }
-    broadcastState();
+    if (players[myId]) {
+      players[myId].x = safeNum(p.x); players[myId].y = safeNum(p.y); players[myId].z = safeNum(p.z);
+      players[myId].ry = safeNum(ry); players[myId].rx = safeNum(rx); players[myId].pose = pose;
+    }
+    // 軽量な全員分の位置だけを一括送信
+    const posData = {};
+    Object.values(players).forEach(pl=>{
+      posData[pl.id] = { x:safeNum(pl.x), y:safeNum(pl.y), z:safeNum(pl.z), ry:safeNum(pl.ry), rx:safeNum(pl.rx||0), pose:pl.pose||"stand" };
+    });
+    Object.values(guestConns).forEach(c=>{
+      if (c.open) try { c.send({ type:"pos-all", data:posData }); } catch(e){}
+    });
+    // 10回に1回（≒500ms）フルステートを送信してフェーズ・役割などを再同期
+    fullSyncCounter++;
+    if (fullSyncCounter >= 10) { fullSyncCounter = 0; broadcastState(); }
   } else if (hostConn && hostConn.open) {
-    try { hostConn.send({ type:"pos", x:p.x, y:p.y, z:p.z, ry }); } catch(e){}
+    try { hostConn.send({ type:"pos", x:safeNum(p.x), y:safeNum(p.y), z:safeNum(p.z), ry:safeNum(ry), rx:safeNum(rx), pose }); } catch(e){}
   }
 }, 50);
 
@@ -2943,10 +2975,10 @@ function buildDoll(images){
     arm.position.y = -0.6;
     pivot.add(arm);
     g.add(pivot);
-    return arm;
+    return { mesh: arm, pivot };
   }
-  const leftArm  = armFor(-1, img(2));
-  const rightArm = armFor( 1, img(3));
+  const leftArmData  = armFor(-1, img(2));
+  const rightArmData = armFor( 1, img(3));
 
   function legFor(side, image){
     const pivot = new THREE.Group();
@@ -2955,13 +2987,20 @@ function buildDoll(images){
     leg.position.y = -0.6;
     pivot.add(leg);
     g.add(pivot);
-    return leg;
+    return { mesh: leg, pivot };
   }
-  const leftLeg  = legFor(-1, img(4));
-  const rightLeg = legFor( 1, img(5));
+  const leftLegData  = legFor(-1, img(4));
+  const rightLegData = legFor( 1, img(5));
 
   // パーツ配列は capturePaintSnapshot() の並び順（torso,head,leftArm,rightArm,leftLeg,rightLeg）と対応させる
-  g.userData.parts = [torso, head, leftArm, rightArm, leftLeg, rightLeg];
+  g.userData.parts = [torso, head, leftArmData.mesh, rightArmData.mesh, leftLegData.mesh, rightLegData.mesh];
+  // ポーズ適用用のピボット・グループ参照
+  g.userData.torso = torso;
+  g.userData.headGroup = headGroup;
+  g.userData.leftArmPivot = leftArmData.pivot;
+  g.userData.rightArmPivot = rightArmData.pivot;
+  g.userData.leftLegPivot = leftLegData.pivot;
+  g.userData.rightLegPivot = rightLegData.pivot;
   g.castShadow = true;
   return g;
 }
@@ -3012,17 +3051,15 @@ function updateAvatars(dt){
     const scaleMul = (p.role === "oni" ? 2 : 1) * CH.CHAR_SCALE;
     av.scale.setScalar(scaleMul);
     if (isNew) {
-      // 新規アバターは即座に正しい位置へスナップ（0,0,0 からの lerp を防ぐ）
       av.position.set(p.x, p.y, p.z);
       av.rotation.y = p.ry || 0;
     } else {
-      // 既存アバターは dt ベースの補間で滑らかに追従
       const lerpRate = Math.min(1, dt * 25);
       const dx = p.x - av.position.x;
       const dy = p.y - av.position.y;
       const dz = p.z - av.position.z;
       const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
-      if (dist < 0.01) {
+      if (dist < 0.05) {
         av.position.set(p.x, p.y, p.z);
       } else {
         av.position.x += dx * lerpRate;
@@ -3034,8 +3071,43 @@ function updateAvatars(dt){
       if (Math.abs(dRot) < 0.01) av.rotation.y = p.ry || 0;
       else av.rotation.y += dRot * lerpRate;
     }
+    // rotation.x（壁張り付き・べったり擬態時の傾き）を同期
+    av.rotation.x = p.rx || 0;
+    // ポーズを適用
+    applyPoseToAvatar(av, p.pose || "stand", dt);
     av.visible = true;
   });
+}
+
+function applyPoseToAvatar(av, poseKey, dt){
+  const POSES = CH.POSES;
+  if (!POSES || !POSES[poseKey]) return;
+  const target = POSES[poseKey];
+  const ud = av.userData;
+  if (!ud.torso) return;
+  // アバター側の補間状態を初期化（初回）
+  if (!ud.poseAnim) ud.poseAnim = { torsoScaleY:1, armSpread:0, legSpread:0, hipBend:0, heightDrop:0 };
+  const pa = ud.poseAnim;
+  const rate = Math.min(1, dt * 7);
+  pa.torsoScaleY += (target.torsoScaleY - pa.torsoScaleY) * rate;
+  pa.armSpread   += (target.armSpread   - pa.armSpread)   * rate;
+  pa.legSpread   += (target.legSpread   - pa.legSpread)   * rate;
+  pa.hipBend     += (target.hipBend     - pa.hipBend)     * rate;
+  pa.heightDrop  += (target.heightDrop  - pa.heightDrop)  * rate;
+
+  const sY = pa.torsoScaleY;
+  const sXZ = 1 + (1 - sY) * 0.3;
+  ud.torso.scale.set(1.0 * sXZ, 1.35 * sY, 0.78 * sXZ);
+  ud.torso.position.y = 1.8 - pa.heightDrop;
+  ud.headGroup.position.y = 2.8 - pa.heightDrop * 1.15;
+  ud.leftArmPivot.rotation.x  = pa.hipBend * 0.4;
+  ud.rightArmPivot.rotation.x = pa.hipBend * 0.4;
+  ud.leftArmPivot.rotation.z  =  pa.armSpread;
+  ud.rightArmPivot.rotation.z = -pa.armSpread;
+  ud.leftLegPivot.rotation.x  = pa.hipBend;
+  ud.rightLegPivot.rotation.x = pa.hipBend;
+  ud.leftLegPivot.rotation.z  =  pa.legSpread;
+  ud.rightLegPivot.rotation.z = -pa.legSpread;
 }
 
 /* ===============================================================
