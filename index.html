@@ -2713,7 +2713,7 @@ setInterval(()=>{
 }, 300);
 
 /* ===============================================================
-   位置同期（100msごと）
+   位置同期（50msごと）
    =============================================================== */
 setInterval(()=>{
   if (!myId) return;
@@ -2725,7 +2725,7 @@ setInterval(()=>{
   } else if (hostConn && hostConn.open) {
     try { hostConn.send({ type:"pos", x:p.x, y:p.y, z:p.z, ry }); } catch(e){}
   }
-}, 100);
+}, 50);
 
 /* ===============================================================
    射撃・当たり判定（ホストが判定を行う）
@@ -2918,6 +2918,7 @@ function makeDollPart(geo, image){
   const mesh = new THREE.Mesh(geo, makePartMaterial(image));
   mesh.castShadow = true;
   mesh.receiveShadow = true;
+  mesh.frustumCulled = false;
   return mesh;
 }
 // 自キャラ本体（torso/headGroup/arm/leg の生成コード）と全く同じ寸法・配置で組み立てる
@@ -2999,24 +3000,40 @@ function applyRemotePaint(id, images){
   const g = remoteAvatars[id];
   if (g) applyDollTextures(g, images);
 }
-function updateAvatars(){
+function updateAvatars(dt){
+  dt = dt || 0.016;
   const visible = (phase === "seeking" || phase === "ended");
   Object.keys(remoteAvatars).forEach(id=>{ if (!players[id]) removeAvatar(id); });
   Object.values(players).forEach(p=>{
     if (p.id === myId) return;
     if (!visible) { if (remoteAvatars[p.id]) remoteAvatars[p.id].visible = false; return; }
+    const isNew = !remoteAvatars[p.id];
     const av = ensureAvatar(p.id);
     const scaleMul = (p.role === "oni" ? 2 : 1) * CH.CHAR_SCALE;
     av.scale.setScalar(scaleMul);
-    // 補間（lerp）で滑らかに移動させる（スナップによる瞬間移動を防ぐ）
-    const lerpRate = 0.25;
-    av.position.x += (p.x - av.position.x) * lerpRate;
-    av.position.y += (p.y - av.position.y) * lerpRate;
-    av.position.z += (p.z - av.position.z) * lerpRate;
-    // 回転も補間する（角度の折り返しを考慮）
-    let dRot = (p.ry || 0) - av.rotation.y;
-    dRot = ((dRot + Math.PI) % (Math.PI * 2)) - Math.PI;
-    av.rotation.y += dRot * lerpRate;
+    if (isNew) {
+      // 新規アバターは即座に正しい位置へスナップ（0,0,0 からの lerp を防ぐ）
+      av.position.set(p.x, p.y, p.z);
+      av.rotation.y = p.ry || 0;
+    } else {
+      // 既存アバターは dt ベースの補間で滑らかに追従
+      const lerpRate = Math.min(1, dt * 25);
+      const dx = p.x - av.position.x;
+      const dy = p.y - av.position.y;
+      const dz = p.z - av.position.z;
+      const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+      if (dist < 0.01) {
+        av.position.set(p.x, p.y, p.z);
+      } else {
+        av.position.x += dx * lerpRate;
+        av.position.y += dy * lerpRate;
+        av.position.z += dz * lerpRate;
+      }
+      let dRot = (p.ry || 0) - av.rotation.y;
+      dRot = ((dRot + Math.PI) % (Math.PI * 2)) - Math.PI;
+      if (Math.abs(dRot) < 0.01) av.rotation.y = p.ry || 0;
+      else av.rotation.y += dRot * lerpRate;
+    }
     av.visible = true;
   });
 }
@@ -3040,8 +3057,8 @@ setInterval(()=>{
   if (myId && CH.consumePaintDirty && CH.consumePaintDirty()) sendPaintUpdate();
 }, 600);
 
-CH.onFrame = function(){
-  updateAvatars();
+CH.onFrame = function(dt){
+  updateAvatars(dt);
 };
 
 /* ===============================================================
