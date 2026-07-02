@@ -2413,8 +2413,8 @@ function animate(){
     updateTPSCamera(dt, false);
   }
   updateShadowFollow();
-  renderer.render(scene, camera);
   if (window.__CH && window.__CH.onFrame) window.__CH.onFrame(dt);
+  renderer.render(scene, camera);
 }
 animate();
 updatePoseButtonsUI();
@@ -2555,6 +2555,11 @@ function handleHostData(conn, data){
   } else if (data.type === "pos") {
     const p = players[conn.peer];
     if (p) { p.x = data.x; p.y = data.y; p.z = data.z; p.ry = data.ry; }
+    // ゲストの位置更新を他の全ゲストへ即座に中継する（次の定期broadcastStateを待たない）
+    Object.entries(guestConns).forEach(([pid, c])=>{
+      if (pid === conn.peer || !c.open) return;
+      try { c.send({ type:"pos-relay", id: conn.peer, x: data.x, y: data.y, z: data.z, ry: data.ry }); } catch(e){}
+    });
   } else if (data.type === "shoot") {
     handleShoot(conn.peer, data.origin, data.dir);
   } else if (data.type === "paint") {
@@ -2597,6 +2602,10 @@ function handleGuestData(data){
   if (!data || !data.type) return;
   if (data.type === "state") {
     applyState(data);
+  } else if (data.type === "pos-relay") {
+    // ホストから中継された他プレイヤーの位置を即座に反映する
+    const p = players[data.id];
+    if (p) { p.x = data.x; p.y = data.y; p.z = data.z; p.ry = data.ry; }
   } else if (data.type === "paint-relay") {
     applyRemotePaint(data.id, data.images);
   } else if (data.type === "tracer") {
@@ -2999,8 +3008,15 @@ function updateAvatars(){
     const av = ensureAvatar(p.id);
     const scaleMul = (p.role === "oni" ? 2 : 1) * CH.CHAR_SCALE;
     av.scale.setScalar(scaleMul);
-    av.position.set(p.x, p.y, p.z);
-    av.rotation.y = p.ry || 0;
+    // 補間（lerp）で滑らかに移動させる（スナップによる瞬間移動を防ぐ）
+    const lerpRate = 0.25;
+    av.position.x += (p.x - av.position.x) * lerpRate;
+    av.position.y += (p.y - av.position.y) * lerpRate;
+    av.position.z += (p.z - av.position.z) * lerpRate;
+    // 回転も補間する（角度の折り返しを考慮）
+    let dRot = (p.ry || 0) - av.rotation.y;
+    dRot = ((dRot + Math.PI) % (Math.PI * 2)) - Math.PI;
+    av.rotation.y += dRot * lerpRate;
     av.visible = true;
   });
 }
