@@ -2439,6 +2439,14 @@ Object.assign(window.__CH, {
   ATLAS_COLS, ATLAS_ROWS, PAINT_CANVAS_SIZE, remapBoxUVsToAtlas,
   capturePaintSnapshot,
   consumePaintDirty(){ const d = paintDirty; paintDirty = false; return d; },
+  clearAllPaint(){
+    paintableParts.forEach(p=>{
+      p.ctx.fillStyle = "#ffffff";
+      p.ctx.fillRect(0,0,p.canvas.width,p.canvas.height);
+      p.texture.needsUpdate = true;
+    });
+    paintDirty = true;
+  },
   getCurrentPose(){ return currentPose; },
   POSES,
 });
@@ -2502,7 +2510,13 @@ mpToggle.addEventListener("click", ()=>{
 
 document.getElementById("mp-back-to-lobby").addEventListener("click", ()=>{
   if (isHost) {
-    Object.values(players).forEach(p=>{ p.role = "hider"; });
+    // 撃ち落とされてplayersから消えたプレイヤーを再追加する
+    Object.entries(guestConns).forEach(([pid, c])=>{
+      if (c.open && !players[pid]) {
+        players[pid] = mkPlayer(pid, "ゲスト");
+      }
+    });
+    Object.values(players).forEach(p=>{ p.role = "hider"; p.x = 0; p.y = 0; p.z = 0; p.pose = "stand"; p.rx = 0; });
     phase = "lobby";
     hideEndTime = 0; seekEndTime = 0; winnerTeam = null;
     broadcastState();
@@ -2654,7 +2668,11 @@ function onPhaseChanged(from, to){
   if (to === "hiding") {
     mpOverlay.style.display = "none";
     CH.character.position.set(0, CH.character.position.y, 0);
-    sendPaintUpdate(); // ラウンド開始時点の見た目を共有しておく
+    // 新しいラウンド開始: ペイントをクリアし、アバターを再構築
+    if (CH.clearAllPaint) CH.clearAllPaint();
+    Object.keys(remoteAvatars).forEach(removeAvatar);
+    paintCache = {};
+    sendPaintUpdate(); // クリア後の見た目を共有
   }
   if (to === "seeking") {
     const me = players[myId];
@@ -2672,6 +2690,11 @@ function onPhaseChanged(from, to){
     if (CH.isFreeCamActive && CH.isFreeCamActive()) CH.setFreeCamMode(false);
     CH.setSizeMultiplier(1);
     mySizeMul = 1;
+    lastRole = null;
+    // アバターとペイントキャッシュをリセット
+    Object.keys(remoteAvatars).forEach(removeAvatar);
+    paintCache = {};
+    CH.character.position.set(0, CH.character.position.y, 0);
   }
 }
 
@@ -2680,17 +2703,22 @@ function onPhaseChanged(from, to){
    =============================================================== */
 function startGame(){
   if (!isHost) return;
-  const ids = Object.keys(players);
+  // 切断済みプレイヤーを除外
+  const ids = Object.keys(players).filter(id=> players[id].connected !== false);
   if (ids.length < 2) { alert("2人以上そろってから開始してください"); return; }
+  // 切断済みエントリを削除
+  Object.keys(players).forEach(id=>{ if (players[id].connected === false) delete players[id]; });
   const oniId = ids[Math.floor(Math.random() * ids.length)];
   ids.forEach(id=>{
     players[id].role = (id === oniId) ? "oni" : "hider";
     players[id].x = 0; players[id].y = 0; players[id].z = 0;
+    players[id].ry = 0; players[id].rx = 0; players[id].pose = "stand";
   });
   phase = "hiding";
   hideEndTime = Date.now() + HIDE_DURATION;
   seekEndTime = 0;
   winnerTeam = null;
+  fullSyncCounter = 0;
   broadcastState();
 }
 
@@ -3079,10 +3107,20 @@ function updateAvatars(dt){
   });
 }
 
+const MP_POSES = {
+  stand:   { torsoScaleY:1.00, armSpread:0.00,   legSpread:0.00, hipBend:0.00,  heightDrop:0.00 },
+  crouch:  { torsoScaleY:0.82, armSpread:0.12,   legSpread:0.12, hipBend:0.95,  heightDrop:0.45 },
+  flatten: { torsoScaleY:1.00, armSpread:1.5708, legSpread:0.00, hipBend:0.00,  heightDrop:1.05 },
+  sit:     { torsoScaleY:0.75, armSpread:0.08,   legSpread:0.05, hipBend:1.35,  heightDrop:0.75 },
+  alert:   { torsoScaleY:1.06, armSpread:0.00,   legSpread:0.00, hipBend:-0.15, heightDrop:-0.25 },
+  stretch: { torsoScaleY:1.18, armSpread:1.20,   legSpread:0.00, hipBend:-0.30, heightDrop:-0.15 },
+  curl:    { torsoScaleY:0.55, armSpread:0.65,   legSpread:0.30, hipBend:1.55,  heightDrop:0.90 },
+  crawl:   { torsoScaleY:0.90, armSpread:0.90,   legSpread:0.50, hipBend:0.50,  heightDrop:0.85 }
+};
+
 function applyPoseToAvatar(av, poseKey, dt){
-  const POSES = CH.POSES;
-  if (!POSES || !POSES[poseKey]) return;
-  const target = POSES[poseKey];
+  const target = MP_POSES[poseKey];
+  if (!target) return;
   const ud = av.userData;
   if (!ud.torso) return;
   // アバター側の補間状態を初期化（初回）
